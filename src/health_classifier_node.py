@@ -1,16 +1,10 @@
-# For image processing
 import cv2
 import numpy as np
-from PIL import Image
 import argparse
-
-# ROS2 libraries
+import os
 import rclpy
 from rclpy.node import Node
-
 from std_msgs.msg import String
-
-# Neural Network Architecture
 from rknnlite.api import RKNNLite
 from scipy.special import softmax
 
@@ -42,6 +36,8 @@ class VineHealthClassifier(Node):
 
         # Load model
         self.model = RKNNLite()
+        self.model_path = os.path.join(os.path.dirname(__file__), 'vine_health_classifier.rknn')
+        self.model.load_rknn(self.model_path)
         self.model.load_rknn('vine_health_classifier.rknn')
         self.model.init_runtime()
         self.get_logger().info('RKNN model loaded on NPU')
