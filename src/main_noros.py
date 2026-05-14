@@ -1,8 +1,10 @@
 import argparse
 import threading
+import dronekit_sitl
 from cmd import Cmd
-from src.vine_health_classifier import VineHealthClassifier
-from src.drone_mavlink_communication import DroneControl
+from vine_health_classifier import VineHealthClassifier
+from vine_health_classifier_pytorch import VineHealthClassifierTorch
+from drone_mavlink_communication import DroneControl
 
 '''
  Get program settings for command line.
@@ -12,8 +14,8 @@ from src.drone_mavlink_communication import DroneControl
 parser = argparse.ArgumentParser()
 parser.add_argument('-c', '--camera', type=int, default=0)
 parser.add_argument('-p', '--drone_port', type=str, default='/dev/ttyS0')
+parser.add_argument('-s', '--simulator', type=bool, default=False)
 args = parser.parse_args()
-
 
 class DroneShell(Cmd):
     intro = "Welcome to the drone shell. Type help to list commands.\n"
@@ -30,6 +32,10 @@ class DroneShell(Cmd):
         if self._active_thread and self._active_thread.is_alive():
             self._active_thread.join()
 
+    def do_stop(self, arg):
+        self._stop_active()
+        return True
+
     def do_altitude_control(self, ref):
         """Controls the altitude of the drone at a given reference in meters. Type 'altitude_control <reference>'"""
         self._stop_active()
@@ -38,10 +44,18 @@ class DroneShell(Cmd):
         self._active_thread.start()
         print(f"Starting altitude control at {ref} meters...")
 
-    def do_vine_analysis(self):
+    def do_ref(self, arg):
+        """Change the target altitude during flight. Usage: ref <meters>"""
+        try:
+            new_ref = float(arg)
+            self.drone._ref = new_ref
+            print(f"Reference altitude changed to {new_ref}m")
+        except (ValueError, IndexError):
+            print("Invalid input. Usage: ref <value>")
+
+    def do_vine_analysis(self, arg):
         """Starts the preloaded mission with a velocity of 2 m/s and analyzes plants every 0.5 seconds"""
         self._stop_active()
-        self._active_thread = threading.Thread(target=self.vine_classifier.run_analysis, daemon=True)
 
         def vine_analysis():
             """Runs both the route and the analysis functions in parallel threads"""
@@ -58,15 +72,21 @@ class DroneShell(Cmd):
         self._active_thread.start()
         print("Starting vine analysis...")
 
-def main(args=None):
-    vine_classifier = VineHealthClassifier(args.camera)
-    drone = DroneControl(args.port)
+def main():
+    port = args.drone_port
+    if args.simulator:
+        port = 'tcp:127.0.0.1:5763'
+        vine_classifier = VineHealthClassifierTorch(args.camera)
+    else:
+        vine_classifier = VineHealthClassifier(args.camera)
+    drone = DroneControl(port)
     drone_shell = DroneShell(drone, vine_classifier)
 
     drone_shell.cmdloop()
 
+    vine_classifier.stop()
     drone.close()
     print("Program terminated.")
-    
+
 if __name__ == '__main__':
     main()
