@@ -1,6 +1,7 @@
 import time
 import threading
-from dronekit import connect, VehicleMode
+from dronekit import connect, VehicleMode, LocationGlobalRelative
+from scipy.stats import false_discovery_control
 
 """
 Notas para bitácora:
@@ -26,51 +27,54 @@ class DroneControl:
                 print("Waiting for GPS location...")
 
         if not self.drone.armed:
-            print("Arming drone...")
-            time.sleep(1)
+            print("Arming motors...")
             self.drone.armed = True
         # Make sure that the commands where changed
         while not self.drone.armed:
             print("Getting ready to take off ...")
             time.sleep(1)
 
+        print("Motors armed")
+        # Give some time to the autopilot to stabilize
+        time.sleep(2)
+        if self.drone.location.global_relative_frame.alt < 0.2: # given the drone has an altitude accuracy of 0.5, adjust if necessary
+            print("Taking off...")
+            self.drone.simple_takeoff(alt=1) # 1 meter
+            # Give some time to the drone to gain elevation
+            time.sleep(3)
+
     def close(self):
         self.drone.close()
 
     def altitude_control(self, ref: float):
-        '''
-        Logic:
-        1. set mode to GUIDED
-        2. if drone not already flying, arm drone then take off
-        3. get current drone position to keep x and y positions the same
-        4. change z position to ref
-        5. change drone to new position
-        6. ON/OFF control loop. constantly check if the height is the ref and correct it if not
-        '''
         self.drone.mode = VehicleMode('GUIDED')
         while not self.drone.mode.name == 'GUIDED':
-            print("Changing drone mode...")
+            print("Changing drone mode to GUIDED...")
             time.sleep(1)
-        print("Changed drone mode to GUIDED")
+        print("Drone mode GUIDED")
 
         self.take_off()
 
         self._running = True
         self._ref = ref
 
-        # Run CLI listener and control state plotter on a separate threads so it doesn't block the control loop
-        cli_thread = threading.Thread(target=self._cli_listener, daemon=True)
-        plotter_thread = threading.Thread(target=self._plot_control_state(), daemon=True)
-        cli_thread.start()
-        plotter_thread.start()
-        cli_thread.join()
-        plotter_thread.join()
+        # Flag for reaching the reference altitude
+        reached = False
 
         # Set the target altitude
         while self._running:
             location = self.drone.location.global_relative_frame
-            if location.alt != self._ref:
-                self.drone.simple_goto(location)
+            if not self._ref * 0.95 <= location.alt <= self._ref * 1.05:
+                reached = False
+                print(f"Altitude: {location.alt:.2f}m")
+                new_location = LocationGlobalRelative(location.lat, location.lon, self._ref)
+                self.drone.simple_goto(new_location)
+            else:
+                if not reached:
+                    reached = True
+                    print(f"Altitude: {location.alt:.2f}m")
+                    print("Reference altitude reached.")
+            time.sleep(1)
 
         print("Altitude control stopped")
 
@@ -78,7 +82,8 @@ class DroneControl:
         self.drone.mode = VehicleMode('AUTO')
         while not self.drone.mode.name == 'AUTO':
             print("Changing drone mode...")
-            time.sleep(1)
+            time.sleep(2)
+        print(self.drone.mode.name)
         print("Changed drone mode to AUTO")
 
     def _plot_control_state(self):
@@ -86,7 +91,7 @@ class DroneControl:
         alt = self.drone.location.global_relative_frame.alt
         vel = self.drone.velocity
         speed = self.drone.groundspeed
-
+"""
     def _cli_listener(self):
         print("Altitude control active.")
         print("Commands: 'exit' to stop | 'ref <value>' to change altitude")
@@ -103,6 +108,7 @@ class DroneControl:
                     print("Invalid input. Usage: ref <value>")
             else:
                 print("Unknown command. Use 'exit' or 'ref <value>'")
+"""
 """
 Lógica de uso:
 
