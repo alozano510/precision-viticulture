@@ -1,8 +1,6 @@
 import cv2
 import numpy as np
-import argparse
 import os
-from rknnlite.api import RKNNLite
 from scipy.special import softmax
 
 class VineHealthClassifier:
@@ -20,14 +18,14 @@ class VineHealthClassifier:
         self.win_name = "Clasificador de salud de viñedos"
         cv2.namedWindow(self.win_name, cv2.WINDOW_NORMAL)
 
-        # Load model
+        from rknnlite.api import RKNNLite
         self.model = RKNNLite()
         self.model_path = os.path.join(os.path.dirname(__file__), 'vine_health_classifier.rknn')
         self.model.load_rknn(self.model_path)
         self.model.init_runtime()
         print('RKNN model loaded on NPU')
 
-    def image_capture(self):
+    def _image_capture(self):
         has_frame, frame = self.source.read()
         if not has_frame:
             print("Could not read frame")
@@ -35,7 +33,7 @@ class VineHealthClassifier:
 
         return frame
 
-    def draw_prediction(self, frame, prediction, confidence):
+    def _draw_prediction(self, frame, prediction, confidence):
         color = (0, 255, 0) if prediction == 'saludable' else (0, 0, 255)
         cv2.putText(frame, f"{prediction} ({confidence:.1f}%)",
                     (20, 40),
@@ -47,10 +45,10 @@ class VineHealthClassifier:
         cv2.imshow(self.win_name, frame)
 
     @staticmethod
-    def preprocess_rknn(frame):
+    def _preprocess_rknn(frame):
         # Resize and format for RKNN
-        img = cv2.resize(frame, (256, 256))
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        rgb_img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        img = cv2.resize(rgb_img, (256, 256))
 
         # Center crop
         h, w = img.shape[:2]
@@ -62,20 +60,25 @@ class VineHealthClassifier:
         return img
 
     def run_analysis(self):
-        frame = self.image_capture()
+        frame = self._image_capture()
 
-        input_data = self.preprocess_rknn(frame)
+        input_data = self._preprocess_rknn(frame)
+
         outputs = self.model.inference(inputs=[input_data])
         pred = int(np.argmax(outputs[0].flatten()))
         confidence = float(softmax(outputs[0].flatten())[pred] * 100)
         label = self.class_names[pred]
 
-        self.draw_prediction(frame, pred, confidence)
+        self._draw_prediction(frame, pred, confidence)
         cv2.waitKey(1)
 
         print(f'Prediction: {label} {confidence:.1f}%')
-        
+
         return label, confidence
+
+    def stop(self):
+        self.source.release()
+        cv2.destroyWindow(self.win_name)
 
     @staticmethod
     def list_available_cameras(max_index=10):
