@@ -47,6 +47,15 @@ class DroneControl:
         self.drone.close()
 
     def altitude_control(self, ref: float):
+        # Slow down vertical navigation speed for gentler altitude changes
+        self.drone.parameters['WPNAV_SPEED_DN'] = 50  # cm/s (default is 150)
+        self.drone.parameters['WPNAV_SPEED_UP'] = 100  # cm/s
+
+        # Give some time for the parameters to change
+        while not self.drone.parameters['WPNAV_SPEED_DN'] == 50 and self.drone.parameters['WPNAV_SPEED_UP'] == 100:
+            print("Adjusting speed...")
+            time.sleep(1)
+
         self.drone.mode = VehicleMode('GUIDED')
         while not self.drone.mode.name == 'GUIDED':
             print("Changing drone mode to GUIDED...")
@@ -85,6 +94,26 @@ class DroneControl:
             time.sleep(2)
         print(self.drone.mode.name)
         print("Changed drone mode to AUTO")
+
+    def land(self):
+        self.drone.parameters['LAND_SPEED'] = 30 # cm/s
+        self.drone.parameters['LAND_SPEED_HIGH'] = 60 # cm/s
+
+        # Give some time for the parameters to change
+        time.sleep(1)
+
+        print("Landing...")
+        self.drone.mode = VehicleMode('LAND')
+        while not self.drone.mode.name == 'LAND':
+            print("Switching to LAND mode...")
+            time.sleep(1)
+
+        while self.drone.location.global_relative_frame.alt > 0.15:
+            print(f"Altitude: {self.drone.location.global_relative_frame.alt:.2f}m")
+            time.sleep(1)
+
+        print("Landed.")
+        self.drone.armed = False
 
     def _plot_control_state(self):
         # TODO: implement function to show control plots. This has to somehow always work. Maybe implement it as part of the altitude control function. Check section on 'Observing attribute changes' in dronekit documentation.
