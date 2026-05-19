@@ -5,7 +5,7 @@ import os
 from datetime import datetime
 
 from dronekit import connect, VehicleMode, LocationGlobalRelative
-from scipy.stats import false_discovery_control
+from dashboard_server import DashboardServer
 
 """
 Notas para bitácora:
@@ -15,7 +15,8 @@ Actualmente la liberería ya no recibe soporte, por lo que estos features nunca 
 """
 
 class DroneControl:
-    def __init__(self, port: str = '/dev/ttyS0'):
+    def __init__(self, port: str = '/dev/ttyS0',
+                 dashboard: DashboardServer = None,):
         self.drone = connect(port, baud=57600, wait_ready=True)
         if self.drone is not None:
             print("Successfully connected to drone")
@@ -25,6 +26,7 @@ class DroneControl:
         self._log_data = []
         self._logging = False
         self._log_thread = None
+        self._dashboard = dashboard
 
     def take_off(self):
         """Arms drone and prepares it to take off"""
@@ -155,16 +157,21 @@ class DroneControl:
                 t = time.time() - t0
                 alt = self.drone.location.global_relative_frame.alt
                 error = self._ref - alt
+                error_per = (error / self._ref) * 100
                 current = self.drone.battery.current or 0.0  # Amps; -1 if unsupported
-
-                self._log_data.append({
+                entry = {
                     'time_s': round(t, 3),
                     'altitude_m': round(alt, 3),
                     'reference_m': round(self._ref, 3),
                     'error_m': round(error, 3),
                     'error_per': round(error_per, 3),
                     'current_a': round(current, 3),
-                })
+                }
+                self._log_data.append(entry)
+
+                if self._dashboard:
+                    self._dashboard.emit(entry)
+
             except Exception as e:
                 print(f"Logging error: {e}")
 

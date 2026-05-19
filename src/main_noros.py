@@ -5,6 +5,7 @@ from cmd import Cmd
 from vine_health_classifier import VineHealthClassifier
 from vine_health_classifier_pytorch import VineHealthClassifierTorch
 from drone_mavlink_communication import DroneControl
+from dashboard_server import DashboardServer
 
 '''
  Get program settings for command line.
@@ -82,13 +83,15 @@ def main():
     else:
         vine_classifier = VineHealthClassifier(args.camera)
 
-    drone = DroneControl(port)
+    dashboard = DashboardServer(port=5000)
+    dashboard.start()
+    drone = DroneControl(port, dashboard=dashboard)
     drone_shell = DroneShell(drone, vine_classifier)
 
     shell_thread = threading.Thread(target=drone_shell.cmdloop, daemon=True)
     shell_thread.start()
 
-    # Main thread runs the image display for the vision model
+    # The Main thread runs the image display for the vision model
     cv2.namedWindow(vine_classifier.win_name, cv2.WINDOW_NORMAL)
     while shell_thread.is_alive():
         frame = vine_classifier.get_latest_frame()

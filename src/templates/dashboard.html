@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Drone Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+  <script src="https://cdn.socket.io/4.6.0/socket.io.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #0f0f1a; color: #e0e0e0; font-family: monospace; padding: 16px; }
+    h1   { text-align: center; color: #38bdf8; margin-bottom: 8px; }
+    #hud { text-align: center; font-size: 1.1em; color: #94a3b8;
+           margin-bottom: 16px; letter-spacing: .05em; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .card { background: #1e1e2e; border-radius: 8px; padding: 12px; }
+    .card h2 { font-size: .85em; color: #94a3b8; margin-bottom: 8px; }
+    /* third card spans full width */
+    @media(max-width:700px){ .grid { grid-template-columns: 1fr; }
+  </style>
+</head>
+<body>
+  <h1>Altitude Control Dashboard</h1>
+  <div id="hud">Waiting for data&hellip;</div>
+  <div class="grid">
+    <div class="card"><h2>Altitude vs Reference (m)</h2><canvas id="cAlt"></canvas></div>
+    <div class="card"><h2>Error (%)</h2>              <canvas id="cErr"></canvas></div>
+    <div class="card"><h2>Battery Current (A)</h2>    <canvas id="cCur"></canvas></div>
+  </div>
+
+<script>
+const MAX = 400;
+const COLORS = { alt:'#38bdf8', ref:'#f87171', err:'#facc15', cur:'#4ade80' };
+
+function mkChart(id, datasets) {
+  return new Chart(document.getElementById(id), {
+    type: 'line',
+    data: { labels: [], datasets },
+    options: {
+      animation: false,
+      responsive: true,
+      interaction: { mode: 'index', intersect: false },
+      plugins: { legend: { labels: { color: '#94a3b8', boxWidth: 12 } } },
+      scales: {
+        x: { ticks:{ color:'#64748b', maxTicksLimit:8 }, grid:{ color:'#2a2a3e' } },
+        y: { ticks:{ color:'#64748b' },                  grid:{ color:'#2a2a3e' } }
+      }
+    }
+  });
+}
+
+function ds(label, color, dash=[]) {
+  return { label, data:[], borderColor:color, borderDash:dash,
+           borderWidth:2, pointRadius:0, tension:0.15 };
+}
+
+const charts = {
+  alt: mkChart('cAlt', [ ds('Altitude', COLORS.alt), ds('Reference', COLORS.ref, [6,3]) ]),
+  err: mkChart('cErr', [ ds('Error %',  COLORS.err) ]),
+  cur: mkChart('cCur', [ ds('Current',  COLORS.cur) ]),
+};
+
+function push(chart, t, ...vals) {
+  chart.data.labels.push(t.toFixed(1));
+  vals.forEach((v, i) => chart.data.datasets[i].data.push(v));
+  if (chart.data.labels.length > MAX) {
+    chart.data.labels.shift();
+    chart.data.datasets.forEach(d => d.data.shift());
+  }
+  chart.update('none');
+}
+
+const socket = io();
+socket.on('telemetry', d => {
+  document.getElementById('hud').innerHTML =
+    `t&nbsp;${d.time_s.toFixed(1)}&nbsp;s &nbsp;|&nbsp; `+
+    `alt&nbsp;<b style="color:${COLORS.alt}">${d.altitude_m.toFixed(2)}&nbsp;m</b> &nbsp;|&nbsp; `+
+    `ref&nbsp;<b style="color:${COLORS.ref}">${d.reference_m.toFixed(2)}&nbsp;m</b> &nbsp;|&nbsp; `+
+    `err&nbsp;<b style="color:${COLORS.err}">${d.error_per.toFixed(1)}&nbsp;%</b> &nbsp;|&nbsp; `+
+    `${d.current_a.toFixed(2)}&nbsp;A`;
+
+  push(charts.alt, d.time_s, d.altitude_m, d.reference_m);
+  push(charts.err, d.time_s, d.error_per);
+  push(charts.cur, d.time_s, d.current_a);
+});
+</script>
+</body>
+</html>
