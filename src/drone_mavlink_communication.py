@@ -1,5 +1,9 @@
+import csv
 import time
 import threading
+import os
+from datetime import datetime
+
 from dronekit import connect, VehicleMode, LocationGlobalRelative
 from scipy.stats import false_discovery_control
 
@@ -15,6 +19,12 @@ class DroneControl:
         self.drone = connect(port, baud=57600, wait_ready=True)
         if self.drone is not None:
             print("Successfully connected to drone")
+
+        self._ref = None
+
+        self._log_data = []
+        self._logging = False
+        self._log_thread = None
 
     def take_off(self):
         """Arms drone and prepares it to take off"""
@@ -47,14 +57,6 @@ class DroneControl:
         self.drone.close()
 
     def altitude_control(self, ref: float):
-        # Slow down vertical navigation speed for gentler altitude changes
-        self.drone.parameters['WPNAV_SPEED_DN'] = 50  # cm/s (default is 150)
-        self.drone.parameters['WPNAV_SPEED_UP'] = 100  # cm/s
-
-        # Give some time for the parameters to change
-        while not self.drone.parameters['WPNAV_SPEED_DN'] == 50 and self.drone.parameters['WPNAV_SPEED_UP'] == 100:
-            print("Adjusting speed...")
-            time.sleep(1)
 
         self.drone.mode = VehicleMode('GUIDED')
         while not self.drone.mode.name == 'GUIDED':
@@ -66,26 +68,35 @@ class DroneControl:
 
         self._running = True
         self._ref = ref
-
         # Flag for reaching the reference altitude
         reached = False
 
-        # Set the target altitude
-        while self._running:
-            location = self.drone.location.global_relative_frame
-            if not self._ref * 0.95 <= location.alt <= self._ref * 1.05:
-                reached = False
-                print(f"Altitude: {location.alt:.2f}m")
-                new_location = LocationGlobalRelative(location.lat, location.lon, self._ref)
-                self.drone.simple_goto(new_location)
-            else:
-                if not reached:
-                    reached = True
-                    print(f"Altitude: {location.alt:.2f}m")
-                    print("Reference altitude reached.")
-            time.sleep(1)
+        self.start_logging()
 
-        print("Altitude control stopped")
+        # Set the target altitude
+        try:
+            while self._running:
+                location = self.drone.location.global_relative_frame
+                if not self._ref * 0.95 <= location.alt <= self._ref * 1.05:
+                    reached = False
+                    print(f"Altitude: {location.alt:.2f}m")
+                    new_location = LocationGlobalRelative(
+                        location.lat, location.lon, self._ref)
+                    self.drone.simple_goto(new_location)
+                else:
+                    if not reached:
+                        reached = True
+                        print(f"Altitude: {location.alt:.2f}m — Reference reached.")
+                time.sleep(1)
+
+        except KeyboardInterrupt:
+            print("Interrupted by user.")
+            self._running = False
+
+        finally:
+            self.land()
+            csv_path = self.stop_logging()
+            print("Altitude control stopped.")
 
     def analysis_route(self):
         self.drone.mode = VehicleMode('AUTO')
@@ -115,29 +126,82 @@ class DroneControl:
         print("Landed.")
         self.drone.armed = False
 
+    def start_logging(self, sample_period: float = 0.2):
+        """
+        Starts background logging thread.
+
+        Args:
+            sample_period (float, optional): Sample period in seconds. Defaults to 0.2.
+        """
+        self._logging = True
+        self._log_data = []
+        self._log_thread = threading.Thread(
+            target=self._log_loop,
+            args=(sample_period,),
+            daemon=True
+        )
+        self._log_thread.start()
+        print(f"Logging started at {1 / sample_period:.1f} Hz")
+
+    def _log_loop(self, sample_period: float):
+        """
+        Background thread: samples drone state and appends to log
+        Args:
+            sample_period (float, optional): Sample period in seconds.
+        """
+        t0 = time.time()
+        while self._logging:
+            try:
+                t = time.time() - t0
+                alt = self.drone.location.global_relative_frame.alt
+                error = self._ref - alt
+                current = self.drone.battery.current or 0.0  # Amps; -1 if unsupported
+
+                self._log_data.append({
+                    'time_s': round(t, 3),
+                    'altitude_m': round(alt, 3),
+                    'reference_m': round(self._ref, 3),
+                    'error_m': round(error, 3),
+                    'error_per': round(error_per, 3),
+                    'current_a': round(current, 3),
+                })
+            except Exception as e:
+                print(f"Logging error: {e}")
+
+            time.sleep(sample_period)
+
+    def stop_logging(self):
+        """
+        Stops logging, saves CSV, and returns the log data.
+        Returns:
+            Path to the saved CSV file
+        """
+        self._logging = False
+        if self._log_thread:
+            self._log_thread.join(timeout=2)
+
+        if not self._log_data:
+            print("No data to save.")
+            return None
+
+        export_path = os.path.join(os.path.dirname(__file__), '..', 'control_log')
+        os.makedirs(export_path, exist_ok=True)
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filepath = os.path.join(export_path, f'altitude_log_{timestamp}.csv')
+
+        fieldnames = self._log_data[0].keys()
+        with open(filepath, 'w', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(self._log_data)
+
+        print(f"Log saved to: {filepath}")
+        return filepath
+
     def _plot_control_state(self):
         # TODO: implement function to show control plots. This has to somehow always work. Maybe implement it as part of the altitude control function. Check section on 'Observing attribute changes' in dronekit documentation.
-        alt = self.drone.location.global_relative_frame.alt
-        vel = self.drone.velocity
-        speed = self.drone.groundspeed
-"""
-    def _cli_listener(self):
-        print("Altitude control active.")
-        print("Commands: 'exit' to stop | 'ref <value>' to change altitude")
-        while self._running:
-            user_input = input("> ").strip()
-            if user_input.lower() == "exit":
-                self._running = False
-            elif user_input.lower().startswith("ref "):
-                try:
-                    new_ref = float(user_input.split()[1])
-                    self._ref = new_ref
-                    print(f"Reference altitude changed to {self._ref}m")
-                except (ValueError, IndexError):
-                    print("Invalid input. Usage: ref <value>")
-            else:
-                print("Unknown command. Use 'exit' or 'ref <value>'")
-"""
+        raise NotImplementedError
+
 """
 Lógica de uso:
 
