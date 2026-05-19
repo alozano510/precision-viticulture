@@ -1,3 +1,4 @@
+import threading
 import cv2
 import os
 from PIL import Image
@@ -7,7 +8,7 @@ from torchvision import models, transforms
 
 class VineHealthClassifierTorch:
     def __init__(self, camera):
-        self.class_names = ['unhealthy', 'healthy']
+        self.class_names = ['no saludable', 'saludable']
 
         # Camera settings
         self.camera = camera
@@ -30,6 +31,10 @@ class VineHealthClassifierTorch:
         self.model.to(self.device)
         self.model.eval()
 
+        self._running = False
+        self._latest_frame = None
+        self._frame_lock = threading.Lock()
+
     def _image_capture(self):
         has_frame, frame = self.source.read()
         if not has_frame:
@@ -38,16 +43,16 @@ class VineHealthClassifierTorch:
 
         return frame
 
-    def _draw_prediction(self, frame, prediction, confidence):
-        color = (0, 255, 0) if prediction == 'saludable' else (0, 0, 255)
-        cv2.putText(frame, f"{prediction} ({confidence:.1f}%)",
+    def _draw_prediction(self, frame, label, confidence):
+        color = (0, 255, 0) if label == 'saludable' else (0, 0, 255)
+        cv2.putText(frame, f"{label} ({confidence:.1f}%)",
                     (20, 40),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     1.2,
                     color,
                     2)
 
-        cv2.imshow(self.win_name, frame)
+        return frame
 
     def _preprocess_torch_tensor(self, frame):
         rgb_img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -66,25 +71,36 @@ class VineHealthClassifierTorch:
         return input_tensor
 
     def run_analysis(self):
-        frame = self._image_capture()
+        self._running = True
 
-        input_data = self._preprocess_torch_tensor(frame)
+        while self._running:
+            frame = self._image_capture()
 
-        with torch.no_grad():
-            output = self.model(input_data)
-            probs = torch.softmax(output, dim=1)[0]
-            _, pred = torch.max(output, 1)
-            label = self.class_names[pred.item()]
-            confidence = probs[pred.item()].item() * 100
+            input_data = self._preprocess_torch_tensor(frame)
 
-        self._draw_prediction(frame, pred, confidence)
-        cv2.waitKey(1)
+            with torch.no_grad():
+                output = self.model(input_data)
+                probs = torch.softmax(output, dim=1)[0]
+                _, pred = torch.max(output, 1)
+                label = self.class_names[pred.item()]
+                confidence = probs[pred.item()].item() * 100
 
-        print(f'Prediction: {label} {confidence:.1f}%')
+            annotated_frame = self._draw_prediction(frame, label, confidence)
+
+            # pass frame display to main processing thread
+            with self._frame_lock:
+                self._latest_frame = annotated_frame
+
+        print("Plant analysis stopped")
+
+    def get_latest_frame(self):
+        """Retrieves the latest annotated frame. Used to display it on the main thread."""
+        with self._frame_lock:
+            return self._latest_frame
 
     def stop(self):
+        self._running = False
         self.source.release()
-        cv2.destroyWindow(self.win_name)
 
     @staticmethod
     def list_available_cameras(max_index=10):
