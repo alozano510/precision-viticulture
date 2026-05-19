@@ -20,7 +20,7 @@ class VineHealthClassifier:
 
         from rknnlite.api import RKNNLite
         self.model = RKNNLite()
-        self.model_path = os.path.join(os.path.dirname(__file__), 'vine_health_classifier.rknn')
+        self.model_path = os.path.join(os.path.dirname(__file__), '..', 'model', 'vine_health_classifier.rknn')
         self.model.load_rknn(self.model_path)
         self.model.init_runtime()
         print('RKNN model loaded on NPU')
