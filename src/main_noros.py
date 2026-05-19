@@ -1,6 +1,6 @@
 import argparse
 import threading
-import dronekit_sitl
+import cv2
 from cmd import Cmd
 from vine_health_classifier import VineHealthClassifier
 from vine_health_classifier_pytorch import VineHealthClassifierTorch
@@ -29,10 +29,12 @@ class DroneShell(Cmd):
 
     def _stop_active(self):
         self.drone._running = False
+        self.vine_classifier._running = False
         if self._active_thread and self._active_thread.is_alive():
             self._active_thread.join()
 
     def do_stop(self, arg):
+        """Terminates program"""
         self._stop_active()
         return True
 
@@ -79,11 +81,24 @@ def main():
         vine_classifier = VineHealthClassifierTorch(args.camera)
     else:
         vine_classifier = VineHealthClassifier(args.camera)
+
     drone = DroneControl(port)
     drone_shell = DroneShell(drone, vine_classifier)
 
-    drone_shell.cmdloop()
+    shell_thread = threading.Thread(target=drone_shell.cmdloop, daemon=True)
+    shell_thread.start()
 
+    # Main thread runs the image display for the vision model
+    cv2.namedWindow(vine_classifier.win_name, cv2.WINDOW_NORMAL)
+    while shell_thread.is_alive():
+        frame = vine_classifier.get_latest_frame()
+        if frame is not None:
+            cv2.imshow(vine_classifier.win_name, frame)
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            drone_shell._stop_active()
+            break
+
+    cv2.destroyWindow(vine_classifier.win_name)
     vine_classifier.stop()
     drone.close()
     print("Program terminated.")
