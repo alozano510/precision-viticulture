@@ -12,7 +12,7 @@ from dashboard_server import DashboardServer
 '''
 parser = argparse.ArgumentParser()
 parser.add_argument('-c', '--camera', type=int, default=0)
-parser.add_argument('-p', '--drone_port', type=str, default='/dev/ttyS0')
+parser.add_argument('-p', '--drone_port', type=str, default='/dev/ttyS4')
 parser.add_argument('-s', '--simulator', type=bool, default=False)
 args = parser.parse_args()
 
