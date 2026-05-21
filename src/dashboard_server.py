@@ -1,4 +1,3 @@
-# dashboard_server.py
 import cv2
 import threading
 from flask import Flask, Response, render_template
