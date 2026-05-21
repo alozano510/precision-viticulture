@@ -1,10 +1,7 @@
-# main_noros.py
 import argparse
 import threading
-import cv2
 from cmd import Cmd
 from vine_health_classifier import VineHealthClassifier
-from vine_health_classifier_pytorch import VineHealthClassifierTorch
 from drone_mavlink_communication import DroneControl
 from dashboard_server import DashboardServer
 
@@ -76,9 +73,17 @@ class DroneShell(Cmd):
         self._active_thread.start()
         print("Starting vine analysis...")
 
+    def do_manual_vision(self, arg):
+        """Starts the vision system without initializing a drone mission."""
+        self._stop_active()
+        self._active_thread = threading.Thread(target=self.vine_classifier.run_analysis, daemon=True)
+        self._active_thread.start()
+        print(f"Starting vision system...")
+
 def main():
     port = args.drone_port
     if args.simulator:
+        from vine_health_classifier_pytorch import VineHealthClassifierTorch
         port = 'tcp:127.0.0.1:5763'
         vine_classifier = VineHealthClassifierTorch(args.camera)
     else:
@@ -87,25 +92,12 @@ def main():
     dashboard = DashboardServer(port=5000)
     dashboard.set_frame_source(vine_classifier.get_latest_frame)
     dashboard.start()
+
     drone = DroneControl(port, dashboard=dashboard)
+
     drone_shell = DroneShell(drone, vine_classifier)
     drone_shell.cmdloop()
-    '''
-    shell_thread = threading.Thread(target=drone_shell.cmdloop, daemon=True)
-    shell_thread.start()
 
-    # The Main thread runs the image display for the vision model
-    cv2.namedWindow(vine_classifier.win_name, cv2.WINDOW_NORMAL)
-    while shell_thread.is_alive():
-        frame = vine_classifier.get_latest_frame()
-        if frame is not None:
-            cv2.imshow(vine_classifier.win_name, frame)
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            drone_shell._stop_active()
-            break
-
-    cv2.destroyWindow(vine_classifier.win_name)
-    '''
     vine_classifier.stop()
     drone.close()
     print("Program terminated.")
