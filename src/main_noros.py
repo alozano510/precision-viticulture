@@ -1,3 +1,4 @@
+# main_noros.py
 import argparse
 import threading
 import cv2
@@ -84,10 +85,12 @@ def main():
         vine_classifier = VineHealthClassifier(args.camera)
 
     dashboard = DashboardServer(port=5000)
+    dashboard.set_frame_source(vine_classifier.get_latest_frame)
     dashboard.start()
     drone = DroneControl(port, dashboard=dashboard)
     drone_shell = DroneShell(drone, vine_classifier)
-
+    drone_shell.cmdloop()
+    '''
     shell_thread = threading.Thread(target=drone_shell.cmdloop, daemon=True)
     shell_thread.start()
 
@@ -102,6 +105,7 @@ def main():
             break
 
     cv2.destroyWindow(vine_classifier.win_name)
+    '''
     vine_classifier.stop()
     drone.close()
     print("Program terminated.")

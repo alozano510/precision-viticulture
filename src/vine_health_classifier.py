@@ -1,3 +1,5 @@
+# vine_health_classifier.py
+import threading
 import cv2
 import numpy as np
 import os
@@ -5,7 +7,7 @@ from scipy.special import softmax
 
 class VineHealthClassifier:
     def __init__(self, camera):
-        self.class_names = ['unhealthy', 'healthy']
+        self.class_names = ['no saludable', 'saludable']
         
         # Camera settings
         self.camera = camera
@@ -15,8 +17,8 @@ class VineHealthClassifier:
             raise ValueError(
                 f"Error: Could not open camera from source {self.camera} \n Available cameras: {self.list_available_cameras()}")
 
-        self.win_name = "Clasificador de salud de viñedos"
-        cv2.namedWindow(self.win_name, cv2.WINDOW_NORMAL)
+        # self.win_name = "Clasificador de salud de viñedos"
+        # cv2.namedWindow(self.win_name, cv2.WINDOW_NORMAL)
 
         from rknnlite.api import RKNNLite
         self.model = RKNNLite()
@@ -24,6 +26,10 @@ class VineHealthClassifier:
         self.model.load_rknn(self.model_path)
         self.model.init_runtime()
         print('RKNN model loaded on NPU')
+
+        self._running = False
+        self._latest_frame = None
+        self._frame_lock = threading.Lock()
 
     def _image_capture(self):
         has_frame, frame = self.source.read()
@@ -33,16 +39,16 @@ class VineHealthClassifier:
 
         return frame
 
-    def _draw_prediction(self, frame, prediction, confidence):
-        color = (0, 255, 0) if prediction == 'saludable' else (0, 0, 255)
-        cv2.putText(frame, f"{prediction} ({confidence:.1f}%)",
+    def _draw_prediction(self, frame, label, confidence):
+        color = (0, 255, 0) if label == 'saludable' else (0, 0, 255)
+        cv2.putText(frame, f"{label} ({confidence:.1f}%)",
                     (20, 40),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     1.2,
                     color,
                     2)
 
-        cv2.imshow(self.win_name, frame)
+        return frame
 
     @staticmethod
     def _preprocess_rknn(frame):
@@ -60,25 +66,33 @@ class VineHealthClassifier:
         return img
 
     def run_analysis(self):
-        frame = self._image_capture()
+        self._running = True
 
-        input_data = self._preprocess_rknn(frame)
+        while self._running:
+            frame = self._image_capture()
 
-        outputs = self.model.inference(inputs=[input_data])
-        pred = int(np.argmax(outputs[0].flatten()))
-        confidence = float(softmax(outputs[0].flatten())[pred] * 100)
-        label = self.class_names[pred]
+            input_data = self._preprocess_rknn(frame)
 
-        self._draw_prediction(frame, pred, confidence)
-        cv2.waitKey(1)
+            outputs = self.model.inference(inputs=[input_data])
+            pred = int(np.argmax(outputs[0].flatten()))
+            confidence = float(softmax(outputs[0].flatten())[pred] * 100)
+            label = self.class_names[pred]
 
-        print(f'Prediction: {label} {confidence:.1f}%')
+            annotated_frame = self._draw_prediction(frame, label, confidence)
 
-        return label, confidence
+            with self._frame_lock:
+                self._latest_frame = annotated_frame
+
+        print("Plant analysis stopped")
+
+    def get_latest_frame(self):
+        """Retrieves the latest annotated frame. Used to display it on the main thread."""
+        with self._frame_lock:
+            return self._latest_frame
 
     def stop(self):
+        self._running = False
         self.source.release()
-        cv2.destroyWindow(self.win_name)
 
     @staticmethod
     def list_available_cameras(max_index=10):
