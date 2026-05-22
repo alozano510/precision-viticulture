@@ -5,7 +5,7 @@ import os
 from scipy.special import softmax
 
 class VineHealthClassifier:
-    def __init__(self, camera):
+    def __init__(self, camera: int):
         self.class_names = ['no saludable', 'saludable']
         
         # Camera settings
@@ -15,9 +15,6 @@ class VineHealthClassifier:
         if not self.source.isOpened():
             raise ValueError(
                 f"Error: Could not open camera from source {self.camera} \n Available cameras: {self.list_available_cameras()}")
-
-        # self.win_name = "Clasificador de salud de viñedos"
-        # cv2.namedWindow(self.win_name, cv2.WINDOW_NORMAL)
 
         from rknnlite.api import RKNNLite
         self.model = RKNNLite()

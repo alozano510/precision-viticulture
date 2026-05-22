@@ -1,5 +1,6 @@
 import argparse
 import threading
+import cv2
 from cmd import Cmd
 from vine_health_classifier import VineHealthClassifier
 from drone_mavlink_communication import DroneControl
@@ -14,6 +15,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('-c', '--camera', type=int, default=0)
 parser.add_argument('-p', '--drone_port', type=str, default='/dev/ttyS4')
 parser.add_argument('-s', '--simulator', type=bool, default=False)
+parser.add_argument('-g', '--graphics', type=bool, default=False)
 args = parser.parse_args()
 
 class DroneShell(Cmd):
@@ -96,9 +98,29 @@ def main():
     drone = DroneControl(port, dashboard=dashboard)
 
     drone_shell = DroneShell(drone, vine_classifier)
-    drone_shell.cmdloop()
+
+    if args.graphics:
+        shell_thread = threading.Thread(target=drone_shell.cmdloop, daemon=True)
+        shell_thread.start()
+
+        # Main thread runs the image display for the vision model
+        cv2.namedWindow("Vine health classifier", cv2.WINDOW_NORMAL)
+        while shell_thread.is_alive():
+            frame = vine_classifier.get_latest_frame()
+            if frame is not None:
+                cv2.imshow("Vine health classifier", frame)
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                drone_shell._stop_active()
+                break
+
+    else:
+        drone_shell.cmdloop()
 
     vine_classifier.stop()
+
+    if args.graphics:
+        cv2.destroyAllWindows()
+
     drone.close()
     print("Program terminated.")
 
