@@ -1,5 +1,6 @@
 import threading
 import cv2
+import time
 import numpy as np
 import os
 from scipy.special import softmax
@@ -11,6 +12,12 @@ class VineHealthClassifier:
         # Camera settings
         self.camera = camera
         self.source = cv2.VideoCapture(self.camera)
+
+        # Cap camera buffer for lighter data transfer
+        self.source.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        self.source.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        self.source.set(cv2.CAP_PROP_FPS, 30)
+        self.source.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
         if not self.source.isOpened():
             raise ValueError(
@@ -78,6 +85,8 @@ class VineHealthClassifier:
 
             with self._frame_lock:
                 self._latest_frame = annotated_frame
+
+            time.sleep(0.1)
 
         print("Plant analysis stopped")
 
