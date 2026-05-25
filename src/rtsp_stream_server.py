@@ -64,8 +64,11 @@ class _VideoFactory(GstRtspServer.RTSPMediaFactory):
 
     def _push_frames(self):
         timestamp = 0
+        interval = 1.0 / self._fps
 
         while self._running:
+            t0 = time.monotonic()
+
             frame = self._frame_source()
             if frame is None:
                 time.sleep(0.01)
@@ -86,6 +89,12 @@ class _VideoFactory(GstRtspServer.RTSPMediaFactory):
             flow = self._appsrc.emit('push-buffer', buf)
             if flow != Gst.FlowReturn.OK:
                 break
+
+            # Rate limit to target fps
+            elapsed = time.monotonic() - t0
+            remainder = interval - elapsed
+            if remainder > 0:
+                time.sleep(remainder)
 
     def stop(self):
         self._running = False
