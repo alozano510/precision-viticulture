@@ -2,6 +2,8 @@ import argparse
 import threading
 import cv2
 from cmd import Cmd
+
+from src.rtsp_stream_server import RTSPStreamServer
 from vine_health_classifier import VineHealthClassifier
 from drone_mavlink_communication import DroneControl
 from dashboard_server import DashboardServer
@@ -91,14 +93,25 @@ def main():
     else:
         vine_classifier = VineHealthClassifier(args.camera)
 
+    # Video stream via RTSP
+    rtsp = RTSPStreamServer(
+        fps=24,
+        width=640,
+        height=480,
+        use_hw_encoder=True,
+    )
+    rtsp.set_frame_source(vine_classifier.get_latest_frame)
+    rtsp.start()
+
+    # Flask server for control dashboard
     dashboard = DashboardServer(port=5000)
-    dashboard.set_frame_source(vine_classifier.get_latest_frame)
     dashboard.start()
 
     drone = DroneControl(port, dashboard=dashboard)
 
     drone_shell = DroneShell(drone, vine_classifier)
 
+    # If selected, run video feed locally
     if args.graphics:
         shell_thread = threading.Thread(target=drone_shell.cmdloop, daemon=True)
         shell_thread.start()
