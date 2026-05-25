@@ -3,7 +3,7 @@ import threading
 import cv2
 from cmd import Cmd
 
-from src.rtsp_stream_server import RTSPStreamServer
+from rtsp_stream_server import RTSPStreamServer
 from vine_health_classifier import VineHealthClassifier
 from drone_mavlink_communication import DroneControl
 from dashboard_server import DashboardServer
