@@ -33,16 +33,17 @@ class _VideoFactory(GstRtspServer.RTSPMediaFactory):
 
     def do_create_element(self, url):
         encoder = (
-            "mpph264enc"                                              # Rockchip NPU
+            "mpph264enc bps=2000000"                                              # Rockchip NPU
             if self._use_hw_encoder else
-            "x264enc tune=zerolatency bitrate=800 speed-preset=ultrafast"  # software
+            "x264enc tune=zerolatency bitrate=2000 speed-preset=ultrafast"  # software
         )
 
         pipeline_str = (
-            f"appsrc name=src is-live=true block=true format=time "
+            f"appsrc name=src is-live=true block=false format=time "
             f"caps=video/x-raw,format=BGR,"
             f"width={self._width},height={self._height},"
             f"framerate={self._fps}/1 "
+            f"! queue max-size-buffers=1 leaky=downstream "
             f"! videoconvert "
             f"! {encoder} "
             f"! h264parse "
@@ -63,17 +64,13 @@ class _VideoFactory(GstRtspServer.RTSPMediaFactory):
 
     def _push_frames(self):
         timestamp = 0
-        interval = 1.0 / self._fps
 
         while self._running:
-            t0 = time.monotonic()
-
             frame = self._frame_source()
             if frame is None:
                 time.sleep(0.01)
                 continue
 
-            # Resize only if the frame doesn't match the configured resolution
             h, w = frame.shape[:2]
             if w != self._width or h != self._height:
                 frame = cv2.resize(frame, (self._width, self._height))
@@ -89,11 +86,6 @@ class _VideoFactory(GstRtspServer.RTSPMediaFactory):
             flow = self._appsrc.emit('push-buffer', buf)
             if flow != Gst.FlowReturn.OK:
                 break
-
-            elapsed = time.monotonic() - t0
-            remainder = interval - elapsed
-            if remainder > 0:
-                time.sleep(remainder)
 
     def stop(self):
         self._running = False
