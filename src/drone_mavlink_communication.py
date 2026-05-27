@@ -101,6 +101,11 @@ class DroneControl:
             print("Altitude control stopped.")
 
     def analysis_route(self):
+        # Download the vehicle waypoints (commands). Wait until download is complete.
+        cmds = self.drone.commands
+        cmds.download()
+        cmds.wait_ready()
+
         self.drone.mode = VehicleMode('AUTO')
         while not self.drone.mode.name == 'AUTO':
             print("Changing drone mode...")

@@ -5,10 +5,6 @@ from flask_socketio import SocketIO
 _app = Flask(__name__)
 _socketio = SocketIO(_app, cors_allowed_origins='*', async_mode='threading')
 
-_HTML = """
-
-"""
-
 @_app.route('/')
 def _index():
     return render_template('dashboard.html')
