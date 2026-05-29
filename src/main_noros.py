@@ -77,6 +77,13 @@ class DroneShell(Cmd):
         self._active_thread.start()
         print("Starting vine analysis...")
 
+    def do_hybrid_vision(self, arg):
+        """Starts the hybrid vision system without initializing a drone mission."""
+        self._stop_active()
+        self._active_thread = threading.Thread(target=self.vine_classifier.hybrid_analysis, daemon=True)
+        self._active_thread.start()
+        print(f"Starting vision system...")
+
     def do_manual_vision(self, arg):
         """Starts the vision system without initializing a drone mission."""
         self._stop_active()

@@ -68,6 +68,56 @@ class VineHealthClassifier:
 
         return img
 
+    def hybrid_analysis(self):
+        """
+        Uses a YOLO model to identify leaves and draw bounding boxes. The image is cropped into multiple images
+        of the bounding boxes and runs a CNN on each of them to classify them.
+        """
+        from ultralytics import YOLO
+
+        # Load your models
+        detector = YOLO('~/precision-viticulture/vine_detection.rknn')
+        print('YOLO model loaded on NPU')
+
+        self._running = True
+
+        while self._running:
+            frame = self._image_capture()
+
+            input_data = self._preprocess_rknn(frame)
+            # Run object detection
+            detection_results = detector(input_data)
+
+            final_label = "saludable"
+            final_confidence = 0
+
+            # Iterate over detections
+            for result in detection_results:
+                for box in result.boxes:
+                    # Crop the RoI
+                    x1, y1, x2, y2 = map(int, box.xyxy[0])
+                    roi = frame[y1:y2, x1:x2]
+
+                    # Run classification on the RoI
+                    outputs = self.model.inference(inputs=[roi])
+                    pred = int(np.argmax(outputs[0].flatten()))
+                    confidence = float(softmax(outputs[0].flatten())[pred] * 100)
+                    label = self.class_names[pred]
+
+                    if label == "no saludable":
+                        final_label = "no saludable"
+
+                    final_confidence = confidence # TODO: placeholder, do a proper confidence calculation
+
+            annotated_frame = self._draw_prediction(detection_results[0].plot(), final_label, final_confidence)
+
+            with self._frame_lock:
+                self._latest_frame = annotated_frame
+
+            time.sleep(0.1)
+
+        print("Plant analysis stopped")
+
     def run_analysis(self):
         self._running = True
 
