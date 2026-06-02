@@ -76,7 +76,8 @@ class VineHealthClassifier:
         from ultralytics import YOLO
 
         # Load your models
-        detector = YOLO('~/precision-viticulture/vine_detection.rknn')
+        yolo_model_path = os.path.join(os.path.dirname(__file__), '..', 'model', 'vine_detection')
+        detector = YOLO(yolo_model_path)
         print('YOLO model loaded on NPU')
 
         self._running = True
