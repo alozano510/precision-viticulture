@@ -23,12 +23,20 @@ class VineHealthClassifier:
             raise ValueError(
                 f"Error: Could not open camera from source {self.camera} \n Available cameras: {self.list_available_cameras()}")
 
+        # Load classifier model
         from rknnlite.api import RKNNLite
         self.model = RKNNLite()
         self.model_path = os.path.join(os.path.dirname(__file__), '..', 'model', 'vine_health_classifier.rknn')
         self.model.load_rknn(self.model_path)
         self.model.init_runtime()
         print('RKNN model loaded on NPU')
+
+        # Load YOLO object detection model
+        self.yolo_model_path = os.path.join(os.path.dirname(__file__), '..', 'model', 'grapevine_canopy_yolo.rknn')
+        self.detector = RKNNLite()
+        self.detector.load_rknn(self.yolo_model_path)
+        self.detector.init_runtime()
+        print('YOLO model loaded on NPU')
 
         self._running = False
         self._latest_frame = None
@@ -54,32 +62,138 @@ class VineHealthClassifier:
         return frame
 
     @staticmethod
-    def _preprocess_rknn(frame):
-        # Resize and format for RKNN
+    def _preprocess_rknn(frame, processing_size: int = 256, roi: int = 224):
+        """
+        Resize and center crop for classification
+        Args:
+            frame (ndarray): frame to process
+            processing_size (int): size of resized image to process
+            roi (int): Region of interest to crop
+        """
         rgb_img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        img = cv2.resize(rgb_img, (256, 256))
+
+        # Resize image
+        h, w = frame.shape[:2]
+        # get the proportion in relation to the largest side of the frame
+        scale = min(processing_size / w, processing_size / h)
+        nw, nh = int(w * scale), int(h * scale)  # scale sides
+        resized_frame = cv2.resize(frame, (nw, nh))
 
         # Center crop
-        h, w = img.shape[:2]
+        h, w = resized_frame.shape[:2]
         top = (h - 224) // 2
         left = (w - 224) // 2
-        img = img[top:top + 224, left:left + 224]
+        img = resized_frame[top:top + 224, left:left + 224]
         img = np.expand_dims(img, axis=0)
 
         return img
+
+    @staticmethod
+    def _preprocess_yolo(frame, processing_size: int):
+        """
+        Letterbox resize and format for YOLO RKNN
+        Args:
+            frame (ndarray): frame to process
+            processing_size (int): size of resized image to process
+        """
+        # Letterbox resize
+        h, w = frame.shape[:2]
+        # get the proportion in relation to the largest side of the frame
+        scale = min(processing_size / w, processing_size / h)
+        nw, nh = int(w * scale), int(h * scale)  # scale sides
+        resized_frame = cv2.resize(frame, (nw, nh))
+
+        # # adds gray bars to fill the image
+        pad_top = (processing_size - nh) // 2
+        pad_left = (processing_size - nw) // 2
+        canvas = np.full((processing_size, processing_size, 3), 114, dtype=np.uint8)
+        canvas[pad_top:pad_top + nh, pad_left:pad_left + nw] = resized_frame
+
+        img = cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB)
+        img = np.expand_dims(img, axis=0)
+
+        return img, scale, pad_top, pad_left
+
+    @staticmethod
+    def _postprocess_yolo(output, conf_threshold, iou_threshold, pad_left, pad_top, scale) -> list:
+        """Returns an empty list if no predicted object passes the condifence threshold"""
+        predictions = output[0]
+        if predictions.ndim == 3:
+            predictions = predictions[0]
+
+        # Get the confidence of the object detections
+        obj_conf = predictions[:, 4]
+        # Eliminate all objects whose confidence doesn't pass the threshold
+        mask = obj_conf > conf_threshold
+        predictions = predictions[mask]
+        if len(predictions) == 0:
+            return []
+
+        # Get the predicted bounding boxes
+        cx, cy, bw, bh = predictions[:, 0], predictions[:, 1], predictions[:, 2], predictions[:, 3]
+        x1 = cx - bw / 2
+        y1 = cy - bh / 2
+        x2 = cx + bw / 2
+        y2 = cy + bh / 2
+
+        # Remove all boxes whose combined confidence does not pass the threshold
+        scores = predictions[:, 4] * predictions[:, 5]  # obj_conf * class_conf
+        keep = scores > conf_threshold
+        boxes = np.stack([x1, y1, x2, y2], axis=1)[keep]
+        scores = scores[keep]
+
+        if len(boxes) == 0:
+            return []
+
+        # Non-Maximum Supression
+        # Keeps the highest scoring box among overlapping boxes
+        indices = cv2.dnn.NMSBoxes(
+            boxes.tolist(), scores.tolist(), conf_threshold, iou_threshold
+        )
+        if len(indices) == 0:
+            return []
+
+        results = []
+        for i in indices.flatten():
+            x1_ = int((boxes[i][0] - pad_left) / scale)
+            y1_ = int((boxes[i][1] - pad_top) / scale)
+            x2_ = int((boxes[i][2] - pad_left) / scale)
+            y2_ = int((boxes[i][3] - pad_top) / scale)
+            results.append((float(scores[i]), x1_, y1_, x2_, y2_))
+
+        return results
+
+    def run_leaf_detection(self, conf_threshold: float = 0.25, iou_threshold: float = 0.45):
+        self._running = True
+
+        while self._running:
+            frame = self._image_capture()
+
+            preprocessed_frame, scale, pad_top, pad_left= self._preprocess_yolo(frame, processing_size=640)
+            output = self.detector.inference(inputs=[preprocessed_frame])
+            results = self._postprocess_yolo(output, conf_threshold, iou_threshold, pad_left, pad_top, scale)
+
+            for (score, x1, y1, x2, y2) in results:
+                label = f"Leaf: {score:.2f}"
+
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
+                (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1)
+                cv2.rectangle(frame, (x1, y1 - th - 8), (x1 + tw + 4, y1), (0, 255, 0), -1)
+                cv2.putText(frame, label, (x1 + 2, y1 - 4),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 1, cv2.LINE_AA)
+
+            # pass frame display to main processing thread
+            with self._frame_lock:
+                self._latest_frame = frame
+
+        print("Leaf detection stopped")
 
     def hybrid_analysis(self):
         """
         Uses a YOLO model to identify leaves and draw bounding boxes. The image is cropped into multiple images
         of the bounding boxes and runs a CNN on each of them to classify them.
         """
-        from ultralytics import YOLO
-
-        # Load your models
-        yolo_model_path = os.path.join(os.path.dirname(__file__), '..', 'model', 'vine_detection')
-        detector = YOLO(yolo_model_path)
-        print('YOLO model loaded on NPU')
-
         self._running = True
 
         while self._running:
@@ -87,7 +201,7 @@ class VineHealthClassifier:
 
             input_data = self._preprocess_rknn(frame)
             # Run object detection
-            detection_results = detector(input_data)
+            # detection_results = detector.inference(inputs=[input_data])
 
             final_label = "saludable"
             final_confidence = 0
