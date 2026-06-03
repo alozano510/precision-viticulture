@@ -5,6 +5,7 @@ from PIL import Image
 import torch
 import torch.nn as nn
 from torchvision import models, transforms
+from ultralytics import YOLO
 
 class VineHealthClassifierTorch:
     def __init__(self, camera: int):
@@ -66,6 +67,23 @@ class VineHealthClassifierTorch:
         input_tensor = transform(pil_image).unsqueeze(0).to(self.device)
 
         return input_tensor
+
+    def run_leaf_detection(self):
+        self._running = True
+        # Load pretrained model
+        model = YOLO("D:\\PycharmProjects\\precision-viticulture\\runs\\detect\\train-9\\weights\\best.pt")
+
+        while self._running:
+            frame = self._image_capture()
+
+            output = model(frame, verbose=False)
+            annotated_frame = output[0].plot()
+
+            # pass frame display to main processing thread
+            with self._frame_lock:
+                self._latest_frame = annotated_frame
+
+        print("Leaf detection stopped")
 
     def run_analysis(self):
         self._running = True
