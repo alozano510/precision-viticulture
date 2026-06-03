@@ -84,10 +84,25 @@ class DroneShell(Cmd):
         self._active_thread.start()
         print(f"Starting vision system...")
 
-    def do_manual_vision(self, arg):
-        """Starts the vision system without initializing a drone mission."""
+    def do_manual_vision(self, model: str = None):
+        """
+        Starts the vision system without initializing a drone mission. A model must be specified (classification/detection).
+        Type manual_vision <classification/detection>
+        """
         self._stop_active()
-        self._active_thread = threading.Thread(target=self.vine_classifier.run_analysis, daemon=True)
+
+        valid_models = {"classification", "detection"}
+
+        while model not in valid_models:
+            if model is not None:
+                print(f"Invalid model '{model}'. Valid options: {', '.join(valid_models)}")
+            model = input("Enter model (classification/detection): ").strip().lower()
+
+        if model == "classification":
+            self._active_thread = threading.Thread(target=self.vine_classifier.run_analysis, daemon=True)
+        elif model == "detection":
+            self._active_thread = threading.Thread(target=self.vine_classifier.run_leaf_detection, daemon=True)
+
         self._active_thread.start()
         print(f"Starting vision system...")
 
@@ -99,7 +114,7 @@ def main():
         vine_classifier = VineHealthClassifierTorch(args.camera)
     else:
         vine_classifier = VineHealthClassifier(args.camera)
-
+    '''
     # Video stream via RTSP
     rtsp = RTSPStreamServer(
         fps=24,
@@ -109,6 +124,7 @@ def main():
     )
     rtsp.set_frame_source(vine_classifier.get_latest_frame)
     rtsp.start()
+    '''
 
     # Flask server for control dashboard
     dashboard = DashboardServer(port=5000)
