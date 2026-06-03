@@ -48,6 +48,8 @@ class VineHealthClassifier:
             print("Could not read frame")
             return
 
+        # Fix frame rotation because the camera is mounted with a 90° rotation
+        frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
         return frame
 
     def _draw_prediction(self, frame, label, confidence):
