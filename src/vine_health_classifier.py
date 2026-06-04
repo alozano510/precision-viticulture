@@ -196,17 +196,15 @@ class VineHealthClassifier:
             t0 = time.perf_counter()
             preprocessed_frame, scale, pad_top, pad_left= self._preprocess_yolo(frame, processing_size=640)
             t1 = time.perf_counter()
-            t2 = time.perf_counter()
             output = self.detector.inference(inputs=[preprocessed_frame])
-            t3 = time.perf_counter()
-            t4 = time.perf_counter()
+            t2 = time.perf_counter()
             results = self._postprocess_yolo(output, conf_threshold, iou_threshold, pad_left, pad_top, scale)
-            t5 = time.perf_counter()
+            t3 = time.perf_counter()
 
             preprocessing_time = t1 - t0
-            inference_time = t3 - t2
-            postprocessing_time = t5 - t4
-            total_time = t5 - t0
+            inference_time = t2 - t1
+            postprocessing_time = t3 - t2
+            total_time = t3 - t0
             print(f"Pre-process : {preprocessing_time * 1000:.2f} ms")
             print(f"Post-process : {postprocessing_time * 1000:.2f} ms")
             print(f"Total        : {total_time * 1000:.2f} ms")
@@ -318,13 +316,16 @@ class VineHealthClassifier:
     def _save_results(results):
         """Exports results as CSV file"""
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"realtime_performance_{timestamp}"
-        with open(filename, "w", newline='') as csvfile:
-            writer = csv.DictWriter(csvfile, fieldnames=["runtime", "runtime_memory"])
-            writer.writeheader()
-            writer.writerows(results)
+        filename = f"realtime_performance_{timestamp}.csv"
+        fieldnames = ['iteration', 'preprocessing_time', 'inference_time', 'postprocessing_time', 'total_time']
 
-        print(f"Saved {filename}.csv")
+        with open(filename, "w", newline='') as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer.writeheader()
+            for i, stats in results['runtime'].items():
+                writer.writerow({'iteration': i, **stats})
+
+        print(f"Saved {filename}")
 
     @staticmethod
     def list_available_cameras(max_index=10):
