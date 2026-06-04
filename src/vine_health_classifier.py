@@ -312,13 +312,13 @@ class VineHealthClassifier:
             with self._frame_lock:
                 self._latest_frame = annotated_frame
 
-                # Save performance stats
-                performance['runtime'][str(i)] = {
-                    'preprocessing_time': preprocessing_time,
-                    'inference_time': inference_time,
-                    'postprocessing_time': postprocessing_time,
-                    'total_time': total_time,
-                }
+            # Save performance stats
+            performance['runtime'][str(i)] = {
+                'preprocessing_time': preprocessing_time,
+                'inference_time': inference_time,
+                'postprocessing_time': postprocessing_time,
+                'total_time': total_time,
+            }
 
             time.sleep(0.1)
 
