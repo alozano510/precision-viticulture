@@ -197,7 +197,7 @@ class VineHealthClassifier:
             preprocessed_frame, scale, pad_top, pad_left= self._preprocess_yolo(frame, processing_size=640)
             t1 = time.perf_counter()
             output = self.detector.inference(inputs=[preprocessed_frame])
-            inference_time = self.detector(inputs=[preprocessed_frame], is_print=True)
+            inference_time = self.detector.eval_perf(inputs=[preprocessed_frame], is_print=True)
             memory_detail = self.detector.eval_memory()
             t2 = time.perf_counter()
             results = self._postprocess_yolo(output, conf_threshold, iou_threshold, pad_left, pad_top, scale)
