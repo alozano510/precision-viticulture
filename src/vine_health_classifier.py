@@ -233,6 +233,7 @@ class VineHealthClassifier:
             # performance['runtime_memory'][str(i)] = memory_detail
 
             i+=1
+            time.sleep(0.1)
 
         self._save_results(performance)
         print("Leaf detection stopped")
@@ -284,23 +285,44 @@ class VineHealthClassifier:
     def run_analysis(self):
         self._running = True
 
+        performance = {
+            'runtime': {},
+            'runtime_memory': {},
+        }
+        i = 0  # iterations counter
+
         while self._running:
             frame = self._image_capture()
-
+            t0 = time.perf_counter()
             input_data = self._preprocess_rknn(frame)
-
+            t1 = time.perf_counter()
             outputs = self.model.inference(inputs=[input_data])
+            t2 = time.perf_counter()
             pred = int(np.argmax(outputs[0].flatten()))
             confidence = float(softmax(outputs[0].flatten())[pred] * 100)
             label = self.class_names[pred]
-
+            t3 = time.perf_counter()
             annotated_frame = self._draw_prediction(frame, label, confidence)
+
+            preprocessing_time = t1 - t0
+            inference_time = t2 - t1
+            postprocessing_time = t3 - t2
+            total_time = t3 - t0
 
             with self._frame_lock:
                 self._latest_frame = annotated_frame
 
+                # Save performance stats
+                performance['runtime'][str(i)] = {
+                    'preprocessing_time': preprocessing_time,
+                    'inference_time': inference_time,
+                    'postprocessing_time': postprocessing_time,
+                    'total_time': total_time,
+                }
+
             time.sleep(0.1)
 
+        self._save_results(performance)
         print("Plant analysis stopped")
 
     def get_latest_frame(self):
