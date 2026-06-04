@@ -320,6 +320,7 @@ class VineHealthClassifier:
                 'total_time': total_time,
             }
 
+            i+=1
             time.sleep(0.1)
 
         self._save_results(performance)
