@@ -64,7 +64,7 @@ class VineHealthClassifier:
         return frame
 
     @staticmethod
-    def _preprocess_rknn(frame, processing_size: int = 256, roi: int = 224):
+    def _preprocess_rknn(frame):
         """
         Resize and center crop for classification
         Args:
@@ -75,11 +75,7 @@ class VineHealthClassifier:
         rgb_img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
         # Resize image
-        h, w = frame.shape[:2]
-        # get the proportion in relation to the largest side of the frame
-        scale = min(processing_size / w, processing_size / h)
-        nw, nh = int(w * scale), int(h * scale)  # scale sides
-        resized_frame = cv2.resize(frame, (nw, nh))
+        resized_frame = cv2.resize(rgb_img, (256, 256))
 
         # Center crop
         h, w = resized_frame.shape[:2]
