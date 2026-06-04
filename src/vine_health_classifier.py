@@ -119,6 +119,9 @@ class VineHealthClassifier:
         if predictions.ndim == 3:
             predictions = predictions[0]
 
+        if predictions.shape[0] == 5:
+            predictions = predictions.T
+
         # Get the confidence of the object detections
         obj_conf = predictions[:, 4]
         # Eliminate all objects whose confidence doesn't pass the threshold
@@ -135,10 +138,8 @@ class VineHealthClassifier:
         y2 = cy + bh / 2
 
         # Remove all boxes whose combined confidence does not pass the threshold
-        scores = predictions[:, 4] * predictions[:, 5]  # obj_conf * class_conf
-        keep = scores > conf_threshold
-        boxes = np.stack([x1, y1, x2, y2], axis=1)[keep]
-        scores = scores[keep]
+        scores = predictions[:, 4]
+        boxes = np.stack([x1, y1, x2, y2], axis=1)
 
         if len(boxes) == 0:
             return []
