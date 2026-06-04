@@ -196,16 +196,17 @@ class VineHealthClassifier:
             t0 = time.perf_counter()
             preprocessed_frame, scale, pad_top, pad_left= self._preprocess_yolo(frame, processing_size=640)
             t1 = time.perf_counter()
-            output = self.detector.inference(inputs=[preprocessed_frame])
-            inference_time = self.detector.eval_perf(inputs=[preprocessed_frame], is_print=True)
-            memory_detail = self.detector.eval_memory()
             t2 = time.perf_counter()
-            results = self._postprocess_yolo(output, conf_threshold, iou_threshold, pad_left, pad_top, scale)
+            output = self.detector.inference(inputs=[preprocessed_frame])
             t3 = time.perf_counter()
+            t4 = time.perf_counter()
+            results = self._postprocess_yolo(output, conf_threshold, iou_threshold, pad_left, pad_top, scale)
+            t5 = time.perf_counter()
 
             preprocessing_time = t1 - t0
-            postprocessing_time = t3 - t2
-            total_time = t3 - t0
+            inference_time = t3 - t2
+            postprocessing_time = t5 - t4
+            total_time = t5 - t0
             print(f"Pre-process : {preprocessing_time * 1000:.2f} ms")
             print(f"Post-process : {postprocessing_time * 1000:.2f} ms")
             print(f"Total        : {total_time * 1000:.2f} ms")
@@ -227,11 +228,11 @@ class VineHealthClassifier:
             # Save performance stats
             performance['runtime'][str(i)] = {
                 'preprocessing_time': preprocessing_time,
-                'inference_time': inference_time.get('total_time'),
+                'inference_time': inference_time,
                 'postprocessing_time': postprocessing_time,
                 'total_time': total_time,
             }
-            performance['runtime_memory'][str(i)] = memory_detail
+            # performance['runtime_memory'][str(i)] = memory_detail
 
             i+=1
 
