@@ -114,7 +114,7 @@ def main():
         vine_classifier = VineHealthClassifierTorch(args.camera)
     else:
         vine_classifier = VineHealthClassifier(args.camera)
-    '''
+
     # Video stream via RTSP
     rtsp = RTSPStreamServer(
         fps=24,
@@ -124,7 +124,7 @@ def main():
     )
     rtsp.set_frame_source(vine_classifier.get_latest_frame)
     rtsp.start()
-    '''
+
 
     # Flask server for control dashboard
     dashboard = DashboardServer(port=5000)

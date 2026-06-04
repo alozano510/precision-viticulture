@@ -32,10 +32,11 @@ class VineHealthClassifier:
         print('RKNN model loaded on NPU')
 
         # Load YOLO object detection model
-        self.yolo_model_path = os.path.join(os.path.dirname(__file__), '..', 'model', 'grapevine_canopy_yolo.rknn')
+        self.yolo_model_path = os.path.join(os.path.dirname(__file__), '..', 'model', 'vineyard_yolo.rknn')
         self.detector = RKNNLite()
         self.detector.load_rknn(self.yolo_model_path)
         self.detector.init_runtime()
+        self.yolo_classes = None
         print('YOLO model loaded on NPU')
 
         self._running = False
@@ -112,14 +113,13 @@ class VineHealthClassifier:
 
         return img, scale, pad_top, pad_left
 
-    @staticmethod
-    def _postprocess_yolo(output, conf_threshold, iou_threshold, pad_left, pad_top, scale) -> list:
+    def _postprocess_yolo(self, output, conf_threshold, iou_threshold, pad_left, pad_top, scale) -> list:
         """Returns an empty list if no predicted object passes the condifence threshold"""
         predictions = output[0]
         if predictions.ndim == 3:
             predictions = predictions[0]
 
-        if predictions.shape[0] == 5:
+        if predictions.shape[0] < predictions.shape[1]:
             predictions = predictions.T
 
         # Get the confidence of the object detections
@@ -141,6 +141,23 @@ class VineHealthClassifier:
         scores = predictions[:, 4]
         boxes = np.stack([x1, y1, x2, y2], axis=1)
 
+        num_classes = predictions.shape[1] - 5
+
+        if num_classes <= 1:
+            scores = predictions[:, 4]
+            class_ids = np.zeros(len(scores), dtype=int)
+            self.yolo_classes = ["leaf"]
+        else:
+            class_scores = predictions[:, 5:]  # (N, 3)
+            class_ids = np.argmax(class_scores, axis=1)  # (N,)
+            scores = predictions[:, 4] * class_scores[np.arange(len(class_ids)), class_ids]
+            self.yolo_classes = ["grape", "ground", "branch", "leaf"]
+
+        keep = scores > conf_threshold
+        boxes = boxes[keep]
+        scores = scores[keep]
+        class_ids = class_ids[keep]
+
         if len(boxes) == 0:
             return []
 
@@ -158,12 +175,14 @@ class VineHealthClassifier:
             y1_ = int((boxes[i][1] - pad_top) / scale)
             x2_ = int((boxes[i][2] - pad_left) / scale)
             y2_ = int((boxes[i][3] - pad_top) / scale)
-            results.append((float(scores[i]), x1_, y1_, x2_, y2_))
+            results.append((int(class_ids[i]), float(scores[i]), x1_, y1_, x2_, y2_))
 
         return results
 
     def run_leaf_detection(self, conf_threshold: float = 0.25, iou_threshold: float = 0.45):
         self._running = True
+
+        COLORS = [(0, 255, 0), (255, 0, 0), (0, 0, 255)]
 
         while self._running:
             frame = self._image_capture()
@@ -172,15 +191,15 @@ class VineHealthClassifier:
             output = self.detector.inference(inputs=[preprocessed_frame])
             results = self._postprocess_yolo(output, conf_threshold, iou_threshold, pad_left, pad_top, scale)
 
-            for (score, x1, y1, x2, y2) in results:
-                label = f"Leaf: {score:.2f}"
+            for (cls_id, score, x1, y1, x2, y2) in results:
+                color = COLORS[cls_id % len(COLORS)]
+                label = f"{self.yolo_classes[cls_id]}: {score:.2f}"
 
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
                 (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1)
-                cv2.rectangle(frame, (x1, y1 - th - 8), (x1 + tw + 4, y1), (0, 255, 0), -1)
+                cv2.rectangle(frame, (x1, y1 - th - 8), (x1 + tw + 4, y1), color, -1)
                 cv2.putText(frame, label, (x1 + 2, y1 - 4),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 1, cv2.LINE_AA)
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
 
             # pass frame display to main processing thread
             with self._frame_lock:
