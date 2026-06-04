@@ -3,6 +3,8 @@ import cv2
 import time
 import numpy as np
 import os
+import csv
+import datetime
 from scipy.special import softmax
 
 class VineHealthClassifier:
@@ -184,12 +186,29 @@ class VineHealthClassifier:
 
         COLORS = [(0, 255, 0), (255, 0, 0), (0, 0, 255)]
 
+        performance = {
+            'runtime': {},
+            'runtime_memory': {},
+        }
+        i = 0 # iterations counter
         while self._running:
             frame = self._image_capture()
-
+            t0 = time.perf_counter()
             preprocessed_frame, scale, pad_top, pad_left= self._preprocess_yolo(frame, processing_size=640)
+            t1 = time.perf_counter()
             output = self.detector.inference(inputs=[preprocessed_frame])
+            inference_time = self.detector(inputs=[preprocessed_frame], is_print=True)
+            memory_detail = self.detector.eval_memory()
+            t2 = time.perf_counter()
             results = self._postprocess_yolo(output, conf_threshold, iou_threshold, pad_left, pad_top, scale)
+            t3 = time.perf_counter()
+
+            preprocessing_time = t1 - t0
+            postprocessing_time = t3 - t2
+            total_time = t3 - t0
+            print(f"Pre-process : {preprocessing_time * 1000:.2f} ms")
+            print(f"Post-process : {postprocessing_time * 1000:.2f} ms")
+            print(f"Total        : {total_time * 1000:.2f} ms")
 
             for (cls_id, score, x1, y1, x2, y2) in results:
                 color = COLORS[cls_id % len(COLORS)]
@@ -205,6 +224,18 @@ class VineHealthClassifier:
             with self._frame_lock:
                 self._latest_frame = frame
 
+            # Save performance stats
+            performance['runtime'][str(i)] = {
+                'preprocessing_time': preprocessing_time,
+                'inference_time': inference_time.get('total_time'),
+                'postprocessing_time': postprocessing_time,
+                'total_time': total_time,
+            }
+            performance['runtime_memory'][str(i)] = memory_detail
+
+            i+=1
+
+        self._save_results(performance)
         print("Leaf detection stopped")
 
     def hybrid_analysis(self):
@@ -281,6 +312,18 @@ class VineHealthClassifier:
     def stop(self):
         self._running = False
         self.source.release()
+
+    @staticmethod
+    def _save_results(results):
+        """Exports results as CSV file"""
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"realtime_performance_{timestamp}"
+        with open(filename, "w", newline='') as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=["runtime", "runtime_memory"])
+            writer.writeheader()
+            writer.writerows(results)
+
+        print(f"Saved {filename}.csv")
 
     @staticmethod
     def list_available_cameras(max_index=10):
