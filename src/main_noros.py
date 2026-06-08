@@ -3,7 +3,6 @@ import threading
 import cv2
 from cmd import Cmd
 
-from rtsp_stream_server import RTSPStreamServer
 from vine_health_classifier import VineHealthClassifier
 from drone_mavlink_communication import DroneControl
 from dashboard_server import DashboardServer
@@ -18,6 +17,7 @@ parser.add_argument('-c', '--camera', type=int, default=0)
 parser.add_argument('-p', '--drone_port', type=str, default='/dev/ttyS4')
 parser.add_argument('-s', '--simulator', type=bool, default=False)
 parser.add_argument('-g', '--graphics', type=bool, default=False)
+parser.add_argument('-d', '--dashboard', type=bool, default=False)
 args = parser.parse_args()
 
 class DroneShell(Cmd):
@@ -86,12 +86,12 @@ class DroneShell(Cmd):
 
     def do_manual_vision(self, model: str = None):
         """
-        Starts the vision system without initializing a drone mission. A model must be specified (classification/detection).
-        Type manual_vision <classification/detection>
+        Starts the vision system without initializing a drone mission. A model must be specified (classification/detection/hybrid).
+        Type manual_vision <classification/detection/hybrid>
         """
         self._stop_active()
 
-        valid_models = {"classification", "detection"}
+        valid_models = {"classification", "detection", "hybrid"}
 
         while model not in valid_models:
             if model is not None:
@@ -99,9 +99,11 @@ class DroneShell(Cmd):
             model = input("Enter model (classification/detection): ").strip().lower()
 
         if model == "classification":
-            self._active_thread = threading.Thread(target=self.vine_classifier.run_analysis, daemon=True)
+            self._active_thread = threading.Thread(target=self.vine_classifier.run_leaf_classification, daemon=True)
         elif model == "detection":
             self._active_thread = threading.Thread(target=self.vine_classifier.run_leaf_detection, daemon=True)
+        elif model == "hybrid":
+            self._active_thread = threading.Thread(target=self.vine_classifier.hybrid_analysis, daemon=True)
 
         self._active_thread.start()
         print(f"Starting vision system...")
@@ -115,20 +117,23 @@ def main():
     else:
         vine_classifier = VineHealthClassifier(args.camera)
 
-    # Video stream via RTSP
-    rtsp = RTSPStreamServer(
-        fps=24,
-        width=640,
-        height=480,
-        use_hw_encoder=True,
-    )
-    rtsp.set_frame_source(vine_classifier.get_latest_frame)
-    rtsp.start()
-
+    if not args.graphics:
+        # Video stream via RTSP
+        from rtsp_stream_server import RTSPStreamServer
+        rtsp = RTSPStreamServer(
+            fps=24,
+            width=640,
+            height=480,
+            use_hw_encoder=True,
+        )
+        rtsp.set_frame_source(vine_classifier.get_latest_frame)
+        rtsp.start()
 
     # Flask server for control dashboard
-    dashboard = DashboardServer(port=5000)
-    dashboard.start()
+    dashboard = None
+    if args.dashboard:
+        dashboard = DashboardServer(port=5000)
+        dashboard.start()
 
     drone = DroneControl(port, dashboard=dashboard)
 

@@ -28,6 +28,13 @@ class VineHealthClassifier:
             raise ValueError(
                 f"Error: Could not open camera from source {self.camera} \n Available cameras: {self.list_available_cameras()}")
 
+        self._running = False
+        self._latest_frame = None
+        self._frame_lock = threading.Lock()
+
+        self._load_models()
+
+    def _load_models(self):
         # Load classifier model
         from rknnlite.api import RKNNLite
         ram_before_cnn_weights = self._get_process_mem_mb()
@@ -56,10 +63,6 @@ class VineHealthClassifier:
         self.npu_weight_memory = npu_after_yolo_weights - npu_before_yolo_weights
         print('YOLO model loaded on NPU')
 
-        self._running = False
-        self._latest_frame = None
-        self._frame_lock = threading.Lock()
-
     def _image_capture(self):
         has_frame, frame = self.source.read()
         if not has_frame:
@@ -68,17 +71,6 @@ class VineHealthClassifier:
 
         # Fix frame rotation because the camera is mounted with a 90° rotation
         frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
-        return frame
-
-    def _draw_prediction(self, frame, label, confidence):
-        color = (0, 255, 0) if label == 'saludable' else (0, 0, 255)
-        cv2.putText(frame, f"{label} ({confidence:.1f}%)",
-                    (20, 40),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    1.2,
-                    color,
-                    2)
-
         return frame
 
     @staticmethod
@@ -379,7 +371,7 @@ class VineHealthClassifier:
             # Iterate over detections
             for (cls_id, score, x1, y1, x2, y2) in detection_results:
                 # Skip all detected objects that are not leaves
-                if cls_id is not "leaf":
+                if cls_id != "leaf":
                     continue
 
                 # Crop the Region of Interest
@@ -431,6 +423,18 @@ class VineHealthClassifier:
         self.source.release()
 
     @staticmethod
+    def _draw_prediction(frame, label, confidence):
+        color = (0, 255, 0) if label == 'saludable' else (0, 0, 255)
+        cv2.putText(frame, f"{label} ({confidence:.1f}%)",
+                    (20, 40),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    1.2,
+                    color,
+                    2)
+
+        return frame
+
+    @staticmethod
     def _save_results(results):
         """Exports results as CSV file"""
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -474,9 +478,9 @@ class VineHealthClassifier:
             match = re.search(r'(\d+)\s*bytes', result.stdout)
             if match:
                 return int(match.group(1)) / 1024 / 1024
-            return None
+            return 0
         except Exception:
-            return "N/A"
+            return 0
 
     @staticmethod
     def _get_process_mem_mb():

@@ -2,23 +2,21 @@ import threading
 import cv2
 import os
 from PIL import Image
+import time
 import torch
 import torch.nn as nn
 from torchvision import models, transforms
 from ultralytics import YOLO
+from vine_health_classifier import VineHealthClassifier
 
-class VineHealthClassifierTorch:
-    def __init__(self, camera: int):
-        self.class_names = ['no saludable', 'saludable']
+class VineHealthClassifierTorch(VineHealthClassifier):
+    """
+    PyTorch-based subclass of VineHealthClassifier for development on Windows.
+    Replaces RKNN model loading and inference with PyTorch (ResNet50) and Ultralytics YOLO.
+    Camera rotation is not applied on _image_capture() since the camera is upright on the dev machine.
+    """
 
-        # Camera settings
-        self.camera = camera
-        self.source = cv2.VideoCapture(self.camera)
-
-        if not self.source.isOpened():
-            raise ValueError(
-                f"Error: Could not open camera from source {self.camera} \n Available cameras: {self.list_available_cameras()}")
-
+    def _load_models(self):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"Using device: {self.device}\n")
         self.model = models.resnet50(weights=None)
@@ -28,27 +26,22 @@ class VineHealthClassifierTorch:
         self.model.load_state_dict(torch.load(self.model_path, map_location=self.device))
         self.model.to(self.device)
         self.model.eval()
+        print("PyTorch classifier loaded")
 
-        self._running = False
-        self._latest_frame = None
-        self._frame_lock = threading.Lock()
+        # Load Ultralytics YOLO detector
+        yolo_path = os.path.join(
+            os.path.dirname(__file__),
+            '..', 'runs', 'detect', 'train-8', 'weights', 'best.pt'
+        )
+        self.detector = YOLO(yolo_path)
+        self.yolo_classes = self.detector.names
+        print("Ultralytics YOLO loaded")
 
     def _image_capture(self):
         has_frame, frame = self.source.read()
         if not has_frame:
             print("Could not read frame")
             return
-
-        return frame
-
-    def _draw_prediction(self, frame, label, confidence):
-        color = (0, 255, 0) if label == 'saludable' else (0, 0, 255)
-        cv2.putText(frame, f"{label} ({confidence:.1f}%)",
-                    (20, 40),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    1.2,
-                    color,
-                    2)
 
         return frame
 
@@ -68,64 +61,60 @@ class VineHealthClassifierTorch:
 
         return input_tensor
 
-    def run_leaf_detection(self):
-        self._running = True
-        # Load pretrained model
-        model = YOLO("D:\\PycharmProjects\\precision-viticulture\\runs\\detect\\train-9\\weights\\best.pt")
+    def leaf_classification(self, frame):
+        t0 = time.perf_counter()
+        input_tensor = self._preprocess_torch_tensor(frame)
+        t1 = time.perf_counter()
 
-        while self._running:
-            frame = self._image_capture()
+        with torch.no_grad():
+            output = self.model(input_tensor)
+            probs = torch.softmax(output, dim=1)[0]
+            _, pred = torch.max(output, 1)
+            label = self.class_names[pred.item()]
+            confidence = probs[pred.item()].item() * 100
 
-            output = model(frame, verbose=False)
-            annotated_frame = output[0].plot()
+        t2 = time.perf_counter()
 
-            # pass frame display to main processing thread
-            with self._frame_lock:
-                self._latest_frame = annotated_frame
+        runtime = {
+            'preprocessing_time': t1 - t0,
+            'inference_time': t2 - t1,
+            'postprocessing_time': 0.0,
+            'total_time': t2 - t0,
+        }
 
-        print("Leaf detection stopped")
+        # No NPU on dev machine; RAM only
+        memory = {
+            'ram_mb': self._get_process_mem_mb(),
+            'npu_mb': 0,
+        }
 
-    def run_analysis(self):
-        self._running = True
+        return label, confidence, runtime, memory
 
-        while self._running:
-            frame = self._image_capture()
+    def leaf_detection(self, frame, conf_threshold: float = 0.25, iou_threshold: float = 0.45):
+        """Override: run Ultralytics YOLO inference instead of RKNN."""
+        t0 = time.perf_counter()
+        output = self.detector(frame, verbose=False, conf=conf_threshold, iou=iou_threshold)
+        t1 = time.perf_counter()
 
-            input_data = self._preprocess_torch_tensor(frame)
+        results = []
+        for box in output[0].boxes:
+            cls_id = int(box.cls.item())
+            score = float(box.conf.item())
+            x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
+            results.append((cls_id, score, x1, y1, x2, y2))
 
-            with torch.no_grad():
-                output = self.model(input_data)
-                probs = torch.softmax(output, dim=1)[0]
-                _, pred = torch.max(output, 1)
-                label = self.class_names[pred.item()]
-                confidence = probs[pred.item()].item() * 100
+        t2 = time.perf_counter()
 
-            annotated_frame = self._draw_prediction(frame, label, confidence)
+        runtime = {
+            'preprocessing_time': 0.0,
+            'inference_time': t1 - t0,
+            'postprocessing_time': t2 - t1,
+            'total_time': t2 - t0,
+        }
 
-            # pass frame display to main processing thread
-            with self._frame_lock:
-                self._latest_frame = annotated_frame
+        memory = {
+            'ram_mb': self._get_process_mem_mb(),
+            'npu_mb': 0,
+        }
 
-        print("Plant analysis stopped")
-
-    def get_latest_frame(self):
-        """Retrieves the latest annotated frame. Used to display it on the main thread."""
-        with self._frame_lock:
-            return self._latest_frame
-
-    def stop(self):
-        self._running = False
-        self.source.release()
-
-    @staticmethod
-    def list_available_cameras(max_index=10):
-        """Returns a list of all available cameras. If no camera is available, returns a string"""
-        available = []
-        for i in range(max_index):
-            cap = cv2.VideoCapture(i)
-            if cap.isOpened():
-                available.append(i)
-                cap.release()
-        if not available:
-            return "No available cameras"
-        return available
+        return results, runtime, memory
