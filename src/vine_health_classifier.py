@@ -5,6 +5,9 @@ import numpy as np
 import os
 import csv
 import datetime
+import subprocess
+import psutil
+import re
 from scipy.special import softmax
 
 class VineHealthClassifier:
@@ -27,18 +30,30 @@ class VineHealthClassifier:
 
         # Load classifier model
         from rknnlite.api import RKNNLite
+        ram_before_cnn_weights = self._get_process_mem_mb()
+        npu_before_cnn_weights = self._get_npu_mem_mb()
         self.model = RKNNLite()
         self.model_path = os.path.join(os.path.dirname(__file__), '..', 'model', 'vine_health_classifier.rknn')
         self.model.load_rknn(self.model_path)
         self.model.init_runtime()
+        ram_after_cnn_weights = self._get_process_mem_mb()
+        npu_after_cnn_weights = self._get_npu_mem_mb()
+        self.cnn_weight_memory = ram_after_cnn_weights - ram_before_cnn_weights
+        self.npu_weight_memory = npu_after_cnn_weights - npu_before_cnn_weights
         print('RKNN model loaded on NPU')
 
         # Load YOLO object detection model
+        ram_before_yolo_weights = self._get_process_mem_mb()
+        npu_before_yolo_weights = self._get_npu_mem_mb()
         self.yolo_model_path = os.path.join(os.path.dirname(__file__), '..', 'model', 'vineyard_yolo.rknn')
         self.detector = RKNNLite()
         self.detector.load_rknn(self.yolo_model_path)
         self.detector.init_runtime()
         self.yolo_classes = None
+        ram_after_yolo_weights = self._get_process_mem_mb()
+        npu_after_yolo_weights = self._get_npu_mem_mb()
+        self.cnn_weight_memory = ram_after_yolo_weights - ram_before_yolo_weights
+        self.npu_weight_memory = npu_after_yolo_weights - npu_before_yolo_weights
         print('YOLO model loaded on NPU')
 
         self._running = False
@@ -181,149 +196,229 @@ class VineHealthClassifier:
 
         return results
 
-    def run_leaf_detection(self, conf_threshold: float = 0.25, iou_threshold: float = 0.45):
-        self._running = True
+    def leaf_detection(self, frame, conf_threshold: float = 0.25, iou_threshold: float = 0.45):
 
-        COLORS = [(0, 255, 0), (255, 0, 0), (0, 0, 255)]
+        t0 = time.perf_counter()
+        preprocessed_frame, scale, pad_top, pad_left = self._preprocess_yolo(frame, processing_size=640)
+        t1 = time.perf_counter()
+        output = self.detector.inference(inputs=[preprocessed_frame])
+        t2 = time.perf_counter()
+        results = self._postprocess_yolo(output, conf_threshold, iou_threshold, pad_left, pad_top, scale)
+        t3 = time.perf_counter()
 
-        performance = {
-            'runtime': {},
-            'runtime_memory': {},
-        }
-        i = 0 # iterations counter
-        while self._running:
-            frame = self._image_capture()
-            t0 = time.perf_counter()
-            preprocessed_frame, scale, pad_top, pad_left= self._preprocess_yolo(frame, processing_size=640)
-            t1 = time.perf_counter()
-            output = self.detector.inference(inputs=[preprocessed_frame])
-            t2 = time.perf_counter()
-            results = self._postprocess_yolo(output, conf_threshold, iou_threshold, pad_left, pad_top, scale)
-            t3 = time.perf_counter()
+        preprocessing_time = t1 - t0
+        inference_time = t2 - t1
+        postprocessing_time = t3 - t2
+        total_time = t3 - t0
 
-            preprocessing_time = t1 - t0
-            inference_time = t2 - t1
-            postprocessing_time = t3 - t2
-            total_time = t3 - t0
-            print(f"Pre-process : {preprocessing_time * 1000:.2f} ms")
-            print(f"Post-process : {postprocessing_time * 1000:.2f} ms")
-            print(f"Total        : {total_time * 1000:.2f} ms")
-
-            for (cls_id, score, x1, y1, x2, y2) in results:
-                color = COLORS[cls_id % len(COLORS)]
-                label = f"{self.yolo_classes[cls_id]}: {score:.2f}"
-
-                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-                (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1)
-                cv2.rectangle(frame, (x1, y1 - th - 8), (x1 + tw + 4, y1), color, -1)
-                cv2.putText(frame, label, (x1 + 2, y1 - 4),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
-
-            # pass frame display to main processing thread
-            with self._frame_lock:
-                self._latest_frame = frame
-
-            # Save performance stats
-            performance['runtime'][str(i)] = {
+        runtime = {
                 'preprocessing_time': preprocessing_time,
                 'inference_time': inference_time,
                 'postprocessing_time': postprocessing_time,
                 'total_time': total_time,
+        }
+
+        memory = {
+                'ram_mb': self._get_process_mem_mb(),
+                'npu_mb': self._get_npu_mem_mb()
+        }
+        return results, runtime, memory
+
+    def leaf_classification(self, frame):
+
+        t0 = time.perf_counter()
+        input_data = self._preprocess_rknn(frame)
+        t1 = time.perf_counter()
+        outputs = self.model.inference(inputs=[input_data])
+        t2 = time.perf_counter()
+        pred = int(np.argmax(outputs[0].flatten()))
+        confidence = float(softmax(outputs[0].flatten())[pred] * 100)
+        label = self.class_names[pred]
+        t3 = time.perf_counter()
+
+        preprocessing_time = t1 - t0
+        inference_time = t2 - t1
+        postprocessing_time = t3 - t2
+        total_time = t3 - t0
+
+        runtime = {
+            'preprocessing_time': preprocessing_time,
+            'inference_time': inference_time,
+            'postprocessing_time': postprocessing_time,
+            'total_time': total_time,
+        }
+
+        memory = {
+            'ram_mb': self._get_process_mem_mb(),
+            'npu_mb': self._get_npu_mem_mb()
+        }
+
+        return label, confidence, runtime, memory
+
+    def _annotate_detected_objects(self, frame, predictions):
+
+        COLORS = [(0, 255, 0), (255, 0, 0), (0, 0, 255)]
+
+        for (cls_id, score, x1, y1, x2, y2) in predictions:
+            color = COLORS[cls_id % len(COLORS)]
+            label = f"{self.yolo_classes[cls_id]}: {score:.2f}"
+
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+            (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1)
+            cv2.rectangle(frame, (x1, y1 - th - 8), (x1 + tw + 4, y1), color, -1)
+            cv2.putText(frame, label, (x1 + 2, y1 - 4),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
+
+        return frame
+
+    def run_leaf_detection(self, conf_threshold: float = 0.25, iou_threshold: float = 0.45):
+        self._running = True
+
+        baseline_ram = self._get_process_mem_mb()
+        baseline_npu = self._get_npu_mem_mb()
+
+        performance = {
+            'runtime': {},
+            'memory': {},
+        }
+        i = 0 # iteration counter
+
+        while self._running:
+
+            frame = self._image_capture()
+
+            results, runtime, memory= self.leaf_detection(
+                frame=frame,
+                conf_threshold=conf_threshold,
+                iou_threshold=iou_threshold,
+                )
+
+            annotated_frame = self._annotate_detected_objects(frame, results)
+
+            # pass frame display to main processing thread
+            with self._frame_lock:
+                self._latest_frame = annotated_frame
+
+            # Save performance stats
+            performance['runtime'][str(i)] = runtime
+            performance['memory'][str(i)] = {
+                k: v - baseline_ram if 'ram' in k else v - baseline_npu
+                for k, v in memory.items()
             }
-            # performance['runtime_memory'][str(i)] = memory_detail
 
             i+=1
-            time.sleep(0.1)
+            time.sleep(0.3)
 
         self._save_results(performance)
         print("Leaf detection stopped")
 
-    def hybrid_analysis(self):
+    def run_leaf_classification(self):
+        self._running = True
+
+        baseline_ram = self._get_process_mem_mb()
+        baseline_npu = self._get_npu_mem_mb()
+
+        performance = {
+            'runtime': {},
+            'memory': {},
+        }
+        i = 0  # iteration counter
+
+        while self._running:
+            frame = self._image_capture()
+            label, confidence, runtime, memory = self.leaf_classification(frame)
+            annotated_frame = self._draw_prediction(frame, label, confidence)
+
+            with self._frame_lock:
+                self._latest_frame = annotated_frame
+
+            # Save performance stats
+            performance['runtime'][str(i)] = runtime
+            performance['memory'][str(i)] = {
+                k: v - baseline_ram if 'ram' in k else v - baseline_npu
+                for k, v in memory.items()
+            }
+
+            i+=1
+            time.sleep(0.3)
+
+        self._save_results(performance)
+        print("Plant analysis stopped")
+
+    def hybrid_analysis(self, conf_threshold: float = 0.25, iou_threshold: float = 0.45):
         """
         Uses a YOLO model to identify leaves and draw bounding boxes. The image is cropped into multiple images
         of the bounding boxes and runs a CNN on each of them to classify them.
         """
         self._running = True
 
+        baseline_ram = self._get_process_mem_mb()
+        baseline_npu = self._get_npu_mem_mb()
+
+        performance = {
+            'runtime': {},
+            'memory': {},
+        }
+        i = 0  # iteration counter
+
         while self._running:
             frame = self._image_capture()
 
-            input_data = self._preprocess_rknn(frame)
-            # Run object detection
-            # detection_results = detector.inference(inputs=[input_data])
+            # Run leaf detection
+            detection_results, detection_runtime, detection_memory = self.leaf_detection(
+                            frame=frame,
+                            conf_threshold=conf_threshold,
+                            iou_threshold=iou_threshold,
+                            )
 
             final_label = "saludable"
             final_confidence = 0
 
+            classification_runtime = 0
+
             # Iterate over detections
-            for result in detection_results:
-                for box in result.boxes:
-                    # Crop the RoI
-                    x1, y1, x2, y2 = map(int, box.xyxy[0])
-                    roi = frame[y1:y2, x1:x2]
+            for (cls_id, score, x1, y1, x2, y2) in detection_results:
+                # Skip all detected objects that are not leaves
+                if cls_id is not "leaf":
+                    continue
 
-                    # Run classification on the RoI
-                    outputs = self.model.inference(inputs=[roi])
-                    pred = int(np.argmax(outputs[0].flatten()))
-                    confidence = float(softmax(outputs[0].flatten())[pred] * 100)
-                    label = self.class_names[pred]
+                # Crop the Region of Interest
+                roi = frame[y1:y2, x1:x2]
 
-                    if label == "no saludable":
-                        final_label = "no saludable"
+                # Run classification on the RoI
+                label, confidence, runtime, memory = self.leaf_classification(roi)
+                classification_runtime += runtime['total_time']
 
-                    final_confidence = confidence # TODO: placeholder, do a proper confidence calculation
+                final_confidence = confidence # TODO: placeholder, do a proper confidence calculation
 
-            annotated_frame = self._draw_prediction(detection_results[0].plot(), final_label, final_confidence)
+                if label == "no saludable":
+                    final_label = "no saludable"
+                    break
 
-            with self._frame_lock:
-                self._latest_frame = annotated_frame
+            ram_sample = self._get_process_mem_mb()
+            npu_sample = self._get_npu_mem_mb()
 
-            time.sleep(0.1)
-
-        print("Plant analysis stopped")
-
-    def run_analysis(self):
-        self._running = True
-
-        performance = {
-            'runtime': {},
-            'runtime_memory': {},
-        }
-        i = 0  # iterations counter
-
-        while self._running:
-            frame = self._image_capture()
-            t0 = time.perf_counter()
-            input_data = self._preprocess_rknn(frame)
-            t1 = time.perf_counter()
-            outputs = self.model.inference(inputs=[input_data])
-            t2 = time.perf_counter()
-            pred = int(np.argmax(outputs[0].flatten()))
-            confidence = float(softmax(outputs[0].flatten())[pred] * 100)
-            label = self.class_names[pred]
-            t3 = time.perf_counter()
-            annotated_frame = self._draw_prediction(frame, label, confidence)
-
-            preprocessing_time = t1 - t0
-            inference_time = t2 - t1
-            postprocessing_time = t3 - t2
-            total_time = t3 - t0
+            annotated_frame = self._annotate_detected_objects(frame, detection_results)
+            annotated_frame = self._draw_prediction(annotated_frame, final_label, final_confidence)
 
             with self._frame_lock:
                 self._latest_frame = annotated_frame
 
             # Save performance stats
             performance['runtime'][str(i)] = {
-                'preprocessing_time': preprocessing_time,
-                'inference_time': inference_time,
-                'postprocessing_time': postprocessing_time,
-                'total_time': total_time,
+                'detection_time': detection_runtime['total_time'],
+                'classification_time': classification_runtime,
+                'total_time': detection_runtime['total_time'] + classification_runtime
+            }
+            performance['memory'][str(i)] = {
+                'ram_mb': ram_sample - baseline_ram,
+                'npu_mb': npu_sample - baseline_npu,
+                'num_detected_leaves': len(detection_results)
             }
 
             i+=1
-            time.sleep(0.1)
+            time.sleep(0.3)
 
-        self._save_results(performance)
         print("Plant analysis stopped")
 
     def get_latest_frame(self):
@@ -340,13 +435,18 @@ class VineHealthClassifier:
         """Exports results as CSV file"""
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"realtime_performance_{timestamp}.csv"
-        fieldnames = ['iteration', 'preprocessing_time', 'inference_time', 'postprocessing_time', 'total_time']
+
+        fieldnames = ['iteration'] + [key for key in results['runtime']['0']] + [key for key in results['memory']['0']]
 
         with open(filename, "w", newline='') as csvfile:
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
             writer.writeheader()
             for i, stats in results['runtime'].items():
-                writer.writerow({'iteration': i, **stats})
+                writer.writerow({
+                    'iteration': i,
+                    **results['runtime'][i],
+                    **results['memory'][i],
+                })
 
         print(f"Saved {filename}")
 
@@ -362,3 +462,23 @@ class VineHealthClassifier:
         if not available:
             return "No available cameras"
         return available
+
+    @staticmethod
+    def _get_npu_mem_mb():
+        """Read NPU memory from /proc or sysfs (RK3588-specific)."""
+        try:
+            result = subprocess.run(
+                ['cat', '/proc/rknpu/mem'],
+                capture_output=True, text=True
+            )
+            match = re.search(r'(\d+)\s*bytes', result.stdout)
+            if match:
+                return int(match.group(1)) / 1024 / 1024
+            return None
+        except Exception:
+            return "N/A"
+
+    @staticmethod
+    def _get_process_mem_mb():
+        proc = psutil.Process(os.getpid())
+        return proc.memory_info().rss / 1024 / 1024
