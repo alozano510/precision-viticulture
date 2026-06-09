@@ -29,7 +29,7 @@ class VineHealthClassifier:
         self.source = cv2.VideoCapture(self.camera)
 
         # Cap camera buffer for lighter data transfer
-        self.source.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        self.source.set(cv2.CAP_PROP_FRAME_WIDTH, 480)
         self.source.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
         self.source.set(cv2.CAP_PROP_FPS, 30)
         self.source.set(cv2.CAP_PROP_BUFFERSIZE, 1)
@@ -37,7 +37,7 @@ class VineHealthClassifier:
         # Define codec and create VideoWriter
         self.fourcc = cv2.VideoWriter_fourcc(*'mp4v')
         filepath = self.output_dir / "recording.mp4"
-        self.out = cv2.VideoWriter(filepath, self.fourcc, fps, (640, 480))
+        self.out = cv2.VideoWriter(filepath, self.fourcc, fps, (480, 480))
 
         if not self.out.isOpened():
             print("VideoWriter failed to open!")
