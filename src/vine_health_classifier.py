@@ -1,3 +1,4 @@
+import pathlib
 import threading
 import cv2
 import time
@@ -11,9 +12,18 @@ import re
 from scipy.special import softmax
 
 class VineHealthClassifier:
-    def __init__(self, camera: int):
+    def __init__(self, camera: int, fps: int = 10):
         self.class_names = ['no saludable', 'saludable']
-        
+        self._running = False
+        self._latest_frame = None
+        self._fps = fps
+        self._frame_lock = threading.Lock()
+        self._method = None
+        self._timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        self.output_dir = pathlib.Path("runs") / self._timestamp
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+
         # Camera settings
         self.camera = camera
         self.source = cv2.VideoCapture(self.camera)
@@ -24,18 +34,24 @@ class VineHealthClassifier:
         self.source.set(cv2.CAP_PROP_FPS, 30)
         self.source.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
+        # Define codec and create VideoWriter
+        self.fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        filepath = self.output_dir / "recording.mp4"
+        self.out = cv2.VideoWriter(filepath, self.fourcc, fps, (640, 480))
+
+        if not self.out.isOpened():
+            print("VideoWriter failed to open!")
+
         if not self.source.isOpened():
             raise ValueError(
                 f"Error: Could not open camera from source {self.camera} \n Available cameras: {self.list_available_cameras()}")
 
-        self._running = False
-        self._latest_frame = None
-        self._frame_lock = threading.Lock()
 
         self._load_models()
 
     def _load_models(self):
         # Load classifier model
+        self.device = "Orange Pi 5 / RK3588"
         from rknnlite.api import RKNNLite
         ram_before_cnn_weights = self._get_process_mem_mb()
         npu_before_cnn_weights = self._get_npu_mem_mb()
@@ -265,6 +281,7 @@ class VineHealthClassifier:
 
     def run_leaf_detection(self, conf_threshold: float = 0.25, iou_threshold: float = 0.45):
         self._running = True
+        self._method = "YOLO - Object detection"
 
         baseline_ram = self._get_process_mem_mb()
         baseline_npu = self._get_npu_mem_mb()
@@ -276,7 +293,7 @@ class VineHealthClassifier:
         i = 0 # iteration counter
 
         while self._running:
-
+            t_frame_start = time.perf_counter()
             frame = self._image_capture()
 
             results, runtime, memory= self.leaf_detection(
@@ -286,6 +303,7 @@ class VineHealthClassifier:
                 )
 
             annotated_frame = self._annotate_detected_objects(frame, results)
+            self.out.write(annotated_frame)
 
             # pass frame display to main processing thread
             with self._frame_lock:
@@ -299,13 +317,19 @@ class VineHealthClassifier:
             }
 
             i+=1
-            time.sleep(0.3)
 
-        self._save_results(performance)
+            elapsed = time.perf_counter() - t_frame_start
+            sleep_time = 1 / self._fps - elapsed
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+
+        self._save_config()
+        self._save_performance(performance)
         print("Leaf detection stopped")
 
     def run_leaf_classification(self):
         self._running = True
+        self._method = "CNN - Classification"
 
         baseline_ram = self._get_process_mem_mb()
         baseline_npu = self._get_npu_mem_mb()
@@ -317,9 +341,13 @@ class VineHealthClassifier:
         i = 0  # iteration counter
 
         while self._running:
+            t_frame_start = time.perf_counter()
             frame = self._image_capture()
+
             label, confidence, runtime, memory = self.leaf_classification(frame)
             annotated_frame = self._draw_prediction(frame, label, confidence)
+
+            self.out.write(annotated_frame)
 
             with self._frame_lock:
                 self._latest_frame = annotated_frame
@@ -332,9 +360,14 @@ class VineHealthClassifier:
             }
 
             i+=1
-            time.sleep(0.3)
 
-        self._save_results(performance)
+            elapsed = time.perf_counter() - t_frame_start
+            sleep_time = 1 / self._fps - elapsed
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+
+        self._save_config()
+        self._save_performance(performance)
         print("Plant analysis stopped")
 
     def hybrid_analysis(self, conf_threshold: float = 0.25, iou_threshold: float = 0.45):
@@ -343,6 +376,7 @@ class VineHealthClassifier:
         of the bounding boxes and runs a CNN on each of them to classify them.
         """
         self._running = True
+        self._method = "Hybrid"
 
         baseline_ram = self._get_process_mem_mb()
         baseline_npu = self._get_npu_mem_mb()
@@ -354,6 +388,7 @@ class VineHealthClassifier:
         i = 0  # iteration counter
 
         while self._running:
+            t_frame_start = time.perf_counter()
             frame = self._image_capture()
 
             # Run leaf detection
@@ -393,6 +428,8 @@ class VineHealthClassifier:
             annotated_frame = self._annotate_detected_objects(frame, detection_results)
             annotated_frame = self._draw_prediction(annotated_frame, final_label, final_confidence)
 
+            self.out.write(annotated_frame)
+
             with self._frame_lock:
                 self._latest_frame = annotated_frame
 
@@ -409,8 +446,14 @@ class VineHealthClassifier:
             }
 
             i+=1
-            time.sleep(0.3)
 
+            elapsed = time.perf_counter() - t_frame_start
+            sleep_time = 1 / self._fps - elapsed
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+
+        self._save_config()
+        self._save_performance(performance)
         print("Plant analysis stopped")
 
     def get_latest_frame(self):
@@ -421,6 +464,46 @@ class VineHealthClassifier:
     def stop(self):
         self._running = False
         self.source.release()
+        self.out.release()
+
+    def _save_config(self):
+        """Exports the configuration used to run the program as a text file"""
+        filename = f"config.txt"
+        filepath = os.path.join(self.output_dir, filename)
+
+        config = {
+            "device": self.device,
+            "classification model": pathlib.Path(self.model_path).name,
+            "detection model": pathlib.Path(self.yolo_model_path).name,
+            "method": self._method
+        }
+
+        with open(filepath, "w") as f:
+            f.write(f"Run configuration\n")
+            f.write("=" * 40 + "\n")
+            for key, value in config.items():
+                f.write(f"{key}: {value}\n")
+
+        print(f"Saved {filepath}")
+
+    def _save_performance(self, performance):
+        """Exports results as CSV file"""
+        filename = f"realtime_performance.csv"
+        filepath = os.path.join(self.output_dir, filename)
+
+        fieldnames = ['iteration'] + [key for key in performance['runtime']['0']] + [key for key in performance['memory']['0']]
+
+        with open(filepath, "w", newline='') as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer.writeheader()
+            for i, stats in performance['runtime'].items():
+                writer.writerow({
+                    'iteration': i,
+                    **performance['runtime'][i],
+                    **performance['memory'][i],
+                })
+
+        print(f"Saved {filepath}")
 
     @staticmethod
     def _draw_prediction(frame, label, confidence):
@@ -433,26 +516,6 @@ class VineHealthClassifier:
                     2)
 
         return frame
-
-    @staticmethod
-    def _save_results(results):
-        """Exports results as CSV file"""
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"realtime_performance_{timestamp}.csv"
-
-        fieldnames = ['iteration'] + [key for key in results['runtime']['0']] + [key for key in results['memory']['0']]
-
-        with open(filename, "w", newline='') as csvfile:
-            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-            writer.writeheader()
-            for i, stats in results['runtime'].items():
-                writer.writerow({
-                    'iteration': i,
-                    **results['runtime'][i],
-                    **results['memory'][i],
-                })
-
-        print(f"Saved {filename}")
 
     @staticmethod
     def list_available_cameras(max_index=10):

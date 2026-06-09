@@ -117,7 +117,7 @@ def main():
     else:
         vine_classifier = VineHealthClassifier(args.camera)
 
-    if not args.graphics:
+    if not args.graphics and not args.simulator:
         # Video stream via RTSP
         from rtsp_stream_server import RTSPStreamServer
         rtsp = RTSPStreamServer(

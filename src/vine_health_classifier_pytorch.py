@@ -1,4 +1,3 @@
-import threading
 import cv2
 import os
 from PIL import Image
@@ -29,11 +28,11 @@ class VineHealthClassifierTorch(VineHealthClassifier):
         print("PyTorch classifier loaded")
 
         # Load Ultralytics YOLO detector
-        yolo_path = os.path.join(
+        self.yolo_model_path = os.path.join(
             os.path.dirname(__file__),
             '..', 'runs', 'detect', 'train-8', 'weights', 'best.pt'
         )
-        self.detector = YOLO(yolo_path)
+        self.detector = YOLO(self.yolo_model_path)
         self.yolo_classes = self.detector.names
         print("Ultralytics YOLO loaded")
 
