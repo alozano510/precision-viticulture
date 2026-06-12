@@ -11,7 +11,7 @@ from vine_health_classifier import VineHealthClassifier
 class VineHealthClassifierTorch(VineHealthClassifier):
     """
     PyTorch-based subclass of VineHealthClassifier for development on Windows.
-    Replaces RKNN model loading and inference with PyTorch (ResNet50) and Ultralytics YOLO.
+    Replaces RKNN models loading and inference with PyTorch (ResNet50) and Ultralytics YOLO.
     Camera rotation is not applied on _image_capture() since the camera is upright on the dev machine.
     """
 
@@ -21,7 +21,7 @@ class VineHealthClassifierTorch(VineHealthClassifier):
         self.model = models.resnet50(weights=None)
         in_features = self.model.fc.in_features
         self.model.fc = nn.Linear(in_features, 2)
-        self.model_path = os.path.join(os.path.dirname(__file__), '..', 'model', 'binary_classifier_v1.pt')
+        self.model_path = os.path.join(os.path.dirname(__file__), '..', 'models', 'cnn_binary_classifier_v1.pt')
         self.model.load_state_dict(torch.load(self.model_path, map_location=self.device))
         self.model.to(self.device)
         self.model.eval()
@@ -30,7 +30,7 @@ class VineHealthClassifierTorch(VineHealthClassifier):
         # Load Ultralytics YOLO detector
         self.yolo_model_path = os.path.join(
             os.path.dirname(__file__),
-            '..', 'runs', 'detect', 'train-8', 'weights', 'best.pt'
+            '..', 'runs', 'detect', 'train-7', 'weights', 'yolo_grapevine_canopy_leaves.pt'
         )
         self.detector = YOLO(self.yolo_model_path)
         self.yolo_classes = self.detector.names

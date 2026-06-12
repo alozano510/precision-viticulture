@@ -1,0 +1,28 @@
+# ==============================================================================
+# CONTROL DEL DRON Y TELEMETRÍA (MAVLink)
+# ==============================================================================
+dronekit>=2.4.4          # Framework principal para control de vuelo y misiones
+pymavlink>=2.4.40        # Comunicación MAVLink
+
+# ==============================================================================
+# VISIÓN ARTIFICIAL Y PROCESAMIENTO DE DATOS
+# ==============================================================================
+opencv-python>=4.8.0      # Procesamiento de imágenes y visualización
+numpy>=1.24.0            # Manejo de arreglos matriciales de imágenes
+scipy>=1.11.0            # Operaciones matemáticas avanzadas
+Pillow>=10.0.0           # Manejo de formatos de imagen
+
+# ==============================================================================
+# INTERFAZ WEB Y MONITOREO EN TIEMPO REAL
+# ==============================================================================
+Flask>=3.0.0             # Servidor web básico para el Dashboard
+Flask-SocketIO>=5.3.0    # Comunicación por WebSockets para telemetría en tiempo real
+psutil>=5.9.0            # Monitoreo de recursos de hardware
+
+# ==============================================================================
+# ENTORNO DE SIMULACIÓN Y ENTRENAMIENTO (PC de Desarrollo)
+# ==============================================================================
+ultralytics>=8.1.0       # Framework de YOLO para detección y segmentación
+torch>=2.1.0             # PyTorch para entrenamiento y simulación
+torchvision>=0.16.0      # Modelos y transformaciones de imágenes para PyTorch
+matplotlib>=3.7.0        # Generación de gráficas de entrenamiento (plt)

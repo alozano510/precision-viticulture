@@ -21,7 +21,7 @@ class VineHealthClassifier:
         self._method = None
         self._timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
-        self.output_dir = pathlib.Path("runs") / self._timestamp
+        self.output_dir = pathlib.Path("../runs") / self._timestamp
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         # Camera settings
@@ -29,7 +29,7 @@ class VineHealthClassifier:
         self.source = cv2.VideoCapture(self.camera)
 
         # Cap camera buffer for lighter data transfer
-        self.source.set(cv2.CAP_PROP_FRAME_WIDTH, 480)
+        self.source.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
         self.source.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
         self.source.set(cv2.CAP_PROP_FPS, 30)
         self.source.set(cv2.CAP_PROP_BUFFERSIZE, 1)
@@ -37,7 +37,7 @@ class VineHealthClassifier:
         # Define codec and create VideoWriter
         self.fourcc = cv2.VideoWriter_fourcc(*'mp4v')
         filepath = self.output_dir / "recording.mp4"
-        self.out = cv2.VideoWriter(filepath, self.fourcc, fps, (480, 480))
+        self.out = cv2.VideoWriter(filepath, self.fourcc, fps, (480, 640))
 
         if not self.out.isOpened():
             print("VideoWriter failed to open!")
@@ -50,25 +50,25 @@ class VineHealthClassifier:
         self._load_models()
 
     def _load_models(self):
-        # Load classifier model
+        # Load classifier models
         self.device = "Orange Pi 5 / RK3588"
         from rknnlite.api import RKNNLite
         ram_before_cnn_weights = self._get_process_mem_mb()
         npu_before_cnn_weights = self._get_npu_mem_mb()
         self.model = RKNNLite()
-        self.model_path = os.path.join(os.path.dirname(__file__), '..', 'model', 'vine_health_classifier.rknn')
+        self.model_path = os.path.join(os.path.dirname(__file__), '..', 'models', 'vine_health_classifier.rknn')
         self.model.load_rknn(self.model_path)
         self.model.init_runtime()
         ram_after_cnn_weights = self._get_process_mem_mb()
         npu_after_cnn_weights = self._get_npu_mem_mb()
         self.cnn_weight_memory = ram_after_cnn_weights - ram_before_cnn_weights
         self.npu_weight_memory = npu_after_cnn_weights - npu_before_cnn_weights
-        print('RKNN model loaded on NPU')
+        print('RKNN models loaded on NPU')
 
-        # Load YOLO object detection model
+        # Load YOLO object detection models
         ram_before_yolo_weights = self._get_process_mem_mb()
         npu_before_yolo_weights = self._get_npu_mem_mb()
-        self.yolo_model_path = os.path.join(os.path.dirname(__file__), '..', 'model', 'vineyard_yolo.rknn')
+        self.yolo_model_path = os.path.join(os.path.dirname(__file__), '..', 'models', 'vineyard_yolo.rknn')
         self.detector = RKNNLite()
         self.detector.load_rknn(self.yolo_model_path)
         self.detector.init_runtime()
@@ -77,7 +77,7 @@ class VineHealthClassifier:
         npu_after_yolo_weights = self._get_npu_mem_mb()
         self.cnn_weight_memory = ram_after_yolo_weights - ram_before_yolo_weights
         self.npu_weight_memory = npu_after_yolo_weights - npu_before_yolo_weights
-        print('YOLO model loaded on NPU')
+        print('YOLO models loaded on NPU')
 
     def _image_capture(self):
         has_frame, frame = self.source.read()
@@ -139,7 +139,7 @@ class VineHealthClassifier:
         return img, scale, pad_top, pad_left
 
     def _postprocess_yolo(self, output, conf_threshold, iou_threshold, pad_left, pad_top, scale) -> list:
-        """Returns an empty list if no predicted object passes the condifence threshold"""
+        """Returns an empty list if no predicted object passes the confidence threshold"""
         predictions = output[0]
         if predictions.ndim == 3:
             predictions = predictions[0]
@@ -372,7 +372,7 @@ class VineHealthClassifier:
 
     def hybrid_analysis(self, conf_threshold: float = 0.25, iou_threshold: float = 0.45):
         """
-        Uses a YOLO model to identify leaves and draw bounding boxes. The image is cropped into multiple images
+        Uses a YOLO models to identify leaves and draw bounding boxes. The image is cropped into multiple images
         of the bounding boxes and runs a CNN on each of them to classify them.
         """
         self._running = True
@@ -398,15 +398,15 @@ class VineHealthClassifier:
                             iou_threshold=iou_threshold,
                             )
 
-            final_label = "saludable"
-            final_confidence = 0
+            confidence_healthy = []
+            confidence_not_healthy = []
 
             classification_runtime = 0
 
             # Iterate over detections
             for (cls_id, score, x1, y1, x2, y2) in detection_results:
                 # Skip all detected objects that are not leaves
-                if cls_id != "leaf":
+                if "lea" not in self.yolo_classes[cls_id]:
                     continue
 
                 # Crop the Region of Interest
@@ -416,11 +416,26 @@ class VineHealthClassifier:
                 label, confidence, runtime, memory = self.leaf_classification(roi)
                 classification_runtime += runtime['total_time']
 
-                final_confidence = confidence # TODO: placeholder, do a proper confidence calculation
+                if label == "saludable":
+                    confidence_healthy.append(confidence)
+                else:
+                    confidence_not_healthy.append(confidence)
 
-                if label == "no saludable":
-                    final_label = "no saludable"
-                    break
+                # final_confidence = confidence # TODO: placeholder, do a proper confidence calculation
+
+                # if label == "no saludable":
+                    # final_label = "no saludable"
+                    # break
+
+            if not confidence_healthy and not confidence_not_healthy:
+                final_confidence = 0
+                final_label = "inconcluso"
+            elif len(confidence_healthy) > len(confidence_not_healthy):
+                final_confidence = sum(confidence_healthy) / len(confidence_healthy)
+                final_label = "saludable"
+            else:
+                final_confidence = sum(confidence_not_healthy) / len(confidence_not_healthy)
+                final_label = "no saludable"
 
             ram_sample = self._get_process_mem_mb()
             npu_sample = self._get_npu_mem_mb()
@@ -473,8 +488,8 @@ class VineHealthClassifier:
 
         config = {
             "device": self.device,
-            "classification model": pathlib.Path(self.model_path).name,
-            "detection model": pathlib.Path(self.yolo_model_path).name,
+            "classification models": pathlib.Path(self.model_path).name,
+            "detection models": pathlib.Path(self.yolo_model_path).name,
             "method": self._method
         }
 

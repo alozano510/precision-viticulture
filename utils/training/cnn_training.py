@@ -64,9 +64,9 @@ def train_model(model, criterion, optimizer, scheduler, device, dataloaders, dat
 
             for phase in ['train', 'val']:
                 if phase == 'train':
-                    model.train()  # Set model to training mode
+                    model.train()  # Set models to training mode
                 else:
-                    model.eval()   # Set model to evaluate mode
+                    model.eval()   # Set models to evaluate mode
 
                 running_loss = 0.0
                 running_corrects = 0
@@ -114,7 +114,7 @@ def train_model(model, criterion, optimizer, scheduler, device, dataloaders, dat
 
                 print(f'{phase} Loss: {epoch_loss:.4f} Acc: {epoch_acc:.4f} Prec: {epoch_prec:.4f} Recall: {epoch_recall:.4f}')
 
-                # deep copy the model
+                # deep copy the models
                 if phase == 'val' and epoch_acc > best_acc:
                     best_acc = epoch_acc
                     torch.save(model.state_dict(), best_model_params_path)
@@ -125,7 +125,7 @@ def train_model(model, criterion, optimizer, scheduler, device, dataloaders, dat
         print(f'Training complete in {time_elapsed // 60:.0f}m {time_elapsed % 60:.0f}s')
         print(f'Best val Acc: {best_acc:4f}')
 
-        # load best model weights
+        # load best models weights
         model.load_state_dict(torch.load(best_model_params_path, weights_only=True))
     return model
 
@@ -161,7 +161,7 @@ if __name__=='__main__':
     print(f"Using device: {device}")
 
     # Load data
-    data_dir = "D:\\PycharmProjects\\precision-viticulture\\data"
+    data_dir = "/data"
     image_datasets = {x: datasets.ImageFolder(
             root=os.path.join(data_dir, x),
             transform=data_transforms[x],
@@ -175,7 +175,7 @@ if __name__=='__main__':
     dataset_sizes = {x: len(image_datasets[x]) for x in ['train', 'val']}
     class_names = ['no saludable', 'saludable']
 
-    # Load ResNet model
+    # Load ResNet models
     model = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V2)
 
     # Change final layer to be a binary classifier
@@ -183,13 +183,13 @@ if __name__=='__main__':
     in_features = model.fc.in_features
     model.fc = nn.Linear(in_features, num_classes)
 
-    # Move model to GPU
+    # Move models to GPU
     model = model.to(device)
 
     # Freeze layers
     for param in model.parameters():
         param.requires_grad = False
-    # for param in model.layer3.parameters():
+    # for param in models.layer3.parameters():
     #     param.requires_grad = True
     for param in model.layer4.parameters():
         param.requires_grad = True
@@ -213,5 +213,5 @@ if __name__=='__main__':
 
     visualize_model(tuned_model)
 
-    torch.save(tuned_model.state_dict(), "D:\\PycharmProjects\\precision-viticulture\\model\\binary_classifier_v1.pt")
+    torch.save(tuned_model.state_dict(), "/models/cnn_binary_classifier_v1.pt")
     print("Model saved!")

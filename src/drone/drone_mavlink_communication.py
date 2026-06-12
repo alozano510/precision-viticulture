@@ -5,7 +5,7 @@ import os
 from datetime import datetime
 
 from dronekit import connect, VehicleMode, LocationGlobalRelative
-from dashboard_server import DashboardServer
+from src.web_dashboard.dashboard_server import DashboardServer
 
 """
 Notas para bitácora:
@@ -213,30 +213,3 @@ class DroneControl:
     def _plot_control_state(self):
         # TODO: implement function to show control plots. This has to somehow always work. Maybe implement it as part of the altitude control function. Check section on 'Observing attribute changes' in dronekit documentation.
         raise NotImplementedError
-
-"""
-Lógica de uso:
-
-Metas:
-- Controlar altura de dron
-  - Botón para iniciar modo de control de altura
-  - Interfaz para establecer la referencia y la altura deseada
-  - Stream de altura en tiempo real para graficar los cambios
-  - Stream de cambio de energía para graficas los cambios:
-    - Puedo obtener Groundspeed o Velocity TODO:investigar diferencia
-    - TODO: investigar si puedo obtener la velocidad de los motores
-- Tomar captura de plantas para clasificación:
-  Opciones para el control de vuelo para esta parte:
-  - Escenario de aplicación real:
-    - Cargar misión con Waypoints usando QGC. Necesitaría posicionar muy precisamente las plantas
-  - Para demostración de funcionamiento de clasificación:
-    - Controlar dron manualmente con RC y ver la forma de programar un botón del RC para iniciar el escaneo
-
-Funcionamiento a largo plazo:
-1. Diseñar una ruta que siga el dron
-  - Esta ruta puede hacerse desde QGC
-2. Al ejecutar el programa, el dron inicia automáticamente su ruta
-3. Avanza a una velocidad de 2 m/s, analizando las plantas cada 0.5 seg.
-4. Guarda una captura de las plantas que requieran algún tipo de tratamiento junto con su localización
-5. En una computadora remota, el usuario puede ver el feed en tiempo real del dron así como su posición. Para esto necesitaría correr QGC + la terminal del programa. 
-"""

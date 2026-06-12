@@ -34,12 +34,12 @@ class VineHealthClassifier(Node):
         self.win_name = "Clasificador de salud de viñedos"
         cv2.namedWindow(self.win_name, cv2.WINDOW_NORMAL)
 
-        # Load model
+        # Load models
         self.model = RKNNLite()
         self.model_path = os.path.join(os.path.dirname(__file__), 'vine_health_classifier.rknn')
         self.model.load_rknn(self.model_path)
         self.model.init_runtime()
-        self.get_logger().info('RKNN model loaded on NPU')
+        self.get_logger().info('RKNN models loaded on NPU')
 
     def image_capture(self):
         has_frame, frame = self.source.read()

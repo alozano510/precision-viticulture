@@ -1,5 +1,5 @@
 """
-Loads a ResNet model using PyTorch with custom weights and exports it as Rockchip Neural Network (RKNN)
+Loads a ResNet models using PyTorch with custom weights and exports it as Rockchip Neural Network (RKNN)
 IMPORTANT: this program only works on x86 Linux systems.
 """
 
@@ -16,14 +16,14 @@ args = parser.parse_args()
 model_path = args.model_path
 
 while not model_path:
-    print(f"Specify the model path for PyTorch Neural Network to convert")
-    model_path = input("Enter model path: ").strip()
+    print(f"Specify the models path for PyTorch Neural Network to convert")
+    model_path = input("Enter models path: ").strip()
 
 # Set GPU for processing
 device = torch.device("cpu")
 print(f"Using device: {device}\n")
 
-# Load ResNet model
+# Load ResNet models
 model = models.resnet50(weights=None)
 
 # Change final layer to be a binary classifier
@@ -38,7 +38,7 @@ print("Model weights loaded\n")
 model.to(device)
 model.eval()
 
-# Export PyTorch model to open standard format ONNX
+# Export PyTorch models to open standard format ONNX
 dummy_input = torch.randn(1, 3, 224, 224)
 model_name = os.path.splitext(os.path.basename(model_path))[0] + ".onnx"
 torch.onnx.export(
