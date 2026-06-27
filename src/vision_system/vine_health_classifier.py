@@ -370,7 +370,7 @@ class VineHealthClassifier:
         self._save_performance(performance)
         print("Plant analysis stopped")
 
-    def hybrid_analysis(self, conf_threshold: float = 0.25, iou_threshold: float = 0.45):
+    def hybrid_analysis(self, conf_threshold: float = 0.25, iou_threshold: float = 0.45, unhealthy_threshold: float = 0.4,):
         """
         Uses a YOLO models to identify leaves and draw bounding boxes. The image is cropped into multiple images
         of the bounding boxes and runs a CNN on each of them to classify them.
@@ -421,21 +421,29 @@ class VineHealthClassifier:
                 else:
                     confidence_not_healthy.append(confidence)
 
-                # final_confidence = confidence # TODO: placeholder, do a proper confidence calculation
+            # Calculate weighted majority
+            w_healthy = sum(confidence_healthy)
+            w_not_healthy = sum(confidence_not_healthy)
+            w_total = w_healthy + w_not_healthy
 
-                # if label == "no saludable":
-                    # final_label = "no saludable"
-                    # break
-
-            if not confidence_healthy and not confidence_not_healthy:
+            if w_total == 0:
                 final_confidence = 0
                 final_label = "inconcluso"
-            elif len(confidence_healthy) > len(confidence_not_healthy):
-                final_confidence = sum(confidence_healthy) / len(confidence_healthy)
-                final_label = "saludable"
+
             else:
-                final_confidence = sum(confidence_not_healthy) / len(confidence_not_healthy)
-                final_label = "no saludable"
+                # Calculate healthy to unhealthy ratio
+                n_total = len(confidence_healthy) + len(confidence_not_healthy)
+                ratio = len(confidence_not_healthy) / n_total
+
+                if ratio > unhealthy_threshold:
+                    final_confidence = w_not_healthy / w_total
+                    final_label = "no saludable"
+                elif w_healthy > w_not_healthy:
+                    final_confidence = w_healthy / w_total
+                    final_label = "saludable"
+                else:
+                    final_confidence = w_not_healthy / w_total
+                    final_label = "no saludable"
 
             ram_sample = self._get_process_mem_mb()
             npu_sample = self._get_npu_mem_mb()
