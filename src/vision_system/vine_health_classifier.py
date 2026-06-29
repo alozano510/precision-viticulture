@@ -406,7 +406,7 @@ class VineHealthClassifier:
             # Iterate over detections
             for (cls_id, score, x1, y1, x2, y2) in detection_results:
                 # Skip all detected objects that are not leaves
-                if "lea" not in self.yolo_classes[cls_id]:
+                if "Lea" not in self.yolo_classes[cls_id]:
                     continue
 
                 # Crop the Region of Interest
@@ -436,13 +436,13 @@ class VineHealthClassifier:
                 ratio = len(confidence_not_healthy) / n_total
 
                 if ratio > unhealthy_threshold:
-                    final_confidence = w_not_healthy / w_total
+                    final_confidence = w_not_healthy / len(confidence_not_healthy)
                     final_label = "no saludable"
                 elif w_healthy > w_not_healthy:
-                    final_confidence = w_healthy / w_total
+                    final_confidence = w_healthy / len(confidence_healthy)
                     final_label = "saludable"
                 else:
-                    final_confidence = w_not_healthy / w_total
+                    final_confidence = w_not_healthy / len(confidence_not_healthy)
                     final_label = "no saludable"
 
             ram_sample = self._get_process_mem_mb()

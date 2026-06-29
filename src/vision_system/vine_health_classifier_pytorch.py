@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 from torchvision import models, transforms
 from ultralytics import YOLO
-from vine_health_classifier import VineHealthClassifier
+from src.vision_system.vine_health_classifier import VineHealthClassifier
 
 class VineHealthClassifierTorch(VineHealthClassifier):
     """
@@ -21,17 +21,14 @@ class VineHealthClassifierTorch(VineHealthClassifier):
         self.model = models.resnet50(weights=None)
         in_features = self.model.fc.in_features
         self.model.fc = nn.Linear(in_features, 2)
-        self.model_path = os.path.join(os.path.dirname(__file__), '..', 'models', 'cnn_binary_classifier_v1.pt')
+        self.model_path = "D:\PycharmProjects\precision-viticulture\models\cnn_binary_classifier_v1.pt"
         self.model.load_state_dict(torch.load(self.model_path, map_location=self.device))
         self.model.to(self.device)
         self.model.eval()
         print("PyTorch classifier loaded")
 
         # Load Ultralytics YOLO detector
-        self.yolo_model_path = os.path.join(
-            os.path.dirname(__file__),
-            '..', 'runs', 'detect', 'train-7', 'weights', 'yolo_grapevine_canopy_leaves.pt'
-        )
+        self.yolo_model_path = "D:\\PycharmProjects\\precision-viticulture\\runs\\segment\\train-5\\weights\\best.pt"
         self.detector = YOLO(self.yolo_model_path)
         self.yolo_classes = self.detector.names
         print("Ultralytics YOLO loaded")
