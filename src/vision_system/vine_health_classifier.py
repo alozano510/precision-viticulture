@@ -56,7 +56,7 @@ class VineHealthClassifier:
         ram_before_cnn_weights = self._get_process_mem_mb()
         npu_before_cnn_weights = self._get_npu_mem_mb()
         self.model = RKNNLite()
-        self.model_path = os.path.join(os.path.dirname(__file__), '..', 'models', 'vine_health_classifier.rknn')
+        self.model_path = "model/vine_health_classifier.rknn"
         self.model.load_rknn(self.model_path)
         self.model.init_runtime()
         ram_after_cnn_weights = self._get_process_mem_mb()
@@ -68,7 +68,7 @@ class VineHealthClassifier:
         # Load YOLO object detection models
         ram_before_yolo_weights = self._get_process_mem_mb()
         npu_before_yolo_weights = self._get_npu_mem_mb()
-        self.yolo_model_path = os.path.join(os.path.dirname(__file__), '..', 'models', 'vineyard_yolo.rknn')
+        self.yolo_model_path = "utils/coversion/best_rknn_model/best-rk3588.rknn"
         self.detector = RKNNLite()
         self.detector.load_rknn(self.yolo_model_path)
         self.detector.init_runtime()
@@ -140,66 +140,68 @@ class VineHealthClassifier:
 
     def _postprocess_yolo(self, output, conf_threshold, iou_threshold, pad_left, pad_top, scale) -> list:
         """Returns an empty list if no predicted object passes the confidence threshold"""
+        
+        # 1. Parse index 0 which holds boxes and scores
         predictions = output[0]
         if predictions.ndim == 3:
-            predictions = predictions[0]
+            predictions = predictions[0]  # Shape becomes (37, 8400)
 
+        # Transpose so rows represent detections: shape becomes (8400, 37)
         if predictions.shape[0] < predictions.shape[1]:
             predictions = predictions.T
 
-        # Get the confidence of the object detections
-        obj_conf = predictions[:, 4]
-        # Eliminate all objects whose confidence doesn't pass the threshold
-        mask = obj_conf > conf_threshold
-        predictions = predictions[mask]
-        if len(predictions) == 0:
-            return []
+        # 2. Extract bounding boxes and class scores
+        # YOLOv8 format: 0,1,2,3 are cx, cy, bw, bh. Index 4 is your "leaf" class score.
+        # Indices 5 to 36 (the remaining 32 channels) are the mask coefficients.
+        boxes_raw = predictions[:, :4]
+        class_scores = predictions[:, 4:5]  # Pulls index 4 as a 2D column matrix
+    
+        # Get highest score and corresponding class ID per anchor point
+        scores = np.max(class_scores, axis=1)
+        class_ids = np.argmax(class_scores, axis=1)
 
-        # Get the predicted bounding boxes
-        cx, cy, bw, bh = predictions[:, 0], predictions[:, 1], predictions[:, 2], predictions[:, 3]
+        # 3. Filter out weak detections before processing math
+        mask = scores > conf_threshold
+        if not np.any(mask):
+            return []  # Return cleanly if nothing is detected in the frame
+
+        # Apply confidence mask to all vectors
+        boxes_raw = boxes_raw[mask]
+        scores = scores[mask]
+        class_ids = class_ids[mask]
+
+        # 4. Convert bounding boxes from center coordinates to corner coordinates
+        cx, cy, bw, bh = boxes_raw[:, 0], boxes_raw[:, 1], boxes_raw[:, 2], boxes_raw[:, 3]
         x1 = cx - bw / 2
         y1 = cy - bh / 2
         x2 = cx + bw / 2
         y2 = cy + bh / 2
-
-        # Remove all boxes whose combined confidence does not pass the threshold
-        scores = predictions[:, 4]
         boxes = np.stack([x1, y1, x2, y2], axis=1)
 
-        num_classes = predictions.shape[1] - 5
-
-        if num_classes <= 1:
-            scores = predictions[:, 4]
-            class_ids = np.zeros(len(scores), dtype=int)
-            self.yolo_classes = ["leaf"]
-        else:
-            class_scores = predictions[:, 5:]  # (N, 3)
-            class_ids = np.argmax(class_scores, axis=1)  # (N,)
-            scores = predictions[:, 4] * class_scores[np.arange(len(class_ids)), class_ids]
-            self.yolo_classes = ["grape", "ground", "branch", "leaf"]
-
-        keep = scores > conf_threshold
-        boxes = boxes[keep]
-        scores = scores[keep]
-        class_ids = class_ids[keep]
-
-        if len(boxes) == 0:
-            return []
-
-        # Non-Maximum Supression
-        # Keeps the highest scoring box among overlapping boxes
+        # 5. Non-Maximum Suppression (NMS) to clear out overlapping boxes
         indices = cv2.dnn.NMSBoxes(
             boxes.tolist(), scores.tolist(), conf_threshold, iou_threshold
         )
         if len(indices) == 0:
             return []
 
+        # 6. Map normalized coordinates back to the original source frame scale
+        if scale <= 0:
+            scale = 1.0
+
         results = []
         for i in indices.flatten():
+            if not np.isfinite(boxes[i]).all():
+                continue
+
             x1_ = int((boxes[i][0] - pad_left) / scale)
             y1_ = int((boxes[i][1] - pad_top) / scale)
             x2_ = int((boxes[i][2] - pad_left) / scale)
             y2_ = int((boxes[i][3] - pad_top) / scale)
+        
+            # Explicit class name setting for 1-class setup
+            self.yolo_classes = ["leaf"]
+        
             results.append((int(class_ids[i]), float(scores[i]), x1_, y1_, x2_, y2_))
 
         return results
@@ -269,7 +271,7 @@ class VineHealthClassifier:
 
         for (cls_id, score, x1, y1, x2, y2) in predictions:
             color = COLORS[cls_id % len(COLORS)]
-            label = f"{self.yolo_classes[cls_id]}: {score:.2f}"
+            label = f"Leaves: {score:.2f}"
 
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
             (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1)
@@ -406,9 +408,21 @@ class VineHealthClassifier:
             # Iterate over detections
             for (cls_id, score, x1, y1, x2, y2) in detection_results:
                 # Skip all detected objects that are not leaves
-                if "Lea" not in self.yolo_classes[cls_id]:
-                    continue
+                # if "Lea" not in self.yolo_classes[cls_id]:
+                #    continue
 
+                # 1. Get current image boundaries safely
+                img_h, img_w = frame.shape[:2]
+            
+                # 2. Guard rail: Clamp coordinates so they NEVER exceed the frame boundaries [0, max_dim - 1]
+                x1 = max(0, min(x1, img_w - 1))
+                y1 = max(0, min(y1, img_h - 1))
+                x2 = max(0, min(x2, img_w - 1))
+                y2 = max(0, min(y2, img_h - 1))
+            
+                # 3. Defensive Gate: If the box is empty or inverted, skip it entirely
+                if (x2 - x1) <= 0 or (y2 - y1) <= 0:
+                    continue
                 # Crop the Region of Interest
                 roi = frame[y1:y2, x1:x2]
 
@@ -555,18 +569,38 @@ class VineHealthClassifier:
 
     @staticmethod
     def _get_npu_mem_mb():
-        """Read NPU memory from /proc or sysfs (RK3588-specific)."""
+        """Read shared DMA-BUF memory allocated by the rknpu driver on Kernel 6.1."""
+        path = '/sys/kernel/debug/dma_buf/bufinfo'
+        if not os.path.exists(path):
+            return 0.0
+    
         try:
+            # Read the buffer info file (requires sudo)
             result = subprocess.run(
-                ['cat', '/proc/rknpu/mem'],
-                capture_output=True, text=True
+                ['sudo', 'cat', path],
+                capture_output=True, text=True, check=True
             )
-            match = re.search(r'(\d+)\s*bytes', result.stdout)
-            if match:
-                return int(match.group(1)) / 1024 / 1024
-            return 0
-        except Exception:
-            return 0
+    
+            total_npu_bytes = 0
+            # Look for buffers explicitly allocated or attached to the rknpu driver
+            for line in result.stdout.splitlines():
+                if 'rknpu' in line or 'rk-npu' in line:
+                    # DMA-BUF lines usually contain the size of the buffer in bytes
+                    # Example: size: 16777216 or similar integer listings
+                    matches = re.findall(r'\bsize:\s*(\d+)\b|\b(\d+)\s+bytes\b', line, re.IGNORECASE)
+                    for match in matches:
+                        # Snag whichever regex group matched the number
+                        num = match[0] if match[0] else match[1]
+                        total_npu_bytes += int(num)
+    
+            return total_npu_bytes / 1024 / 1024  # Convert to MB
+    
+        except subprocess.CalledProcessError:
+            print("Permission Denied: Run your script with 'sudo' to inspect DMA-BUFs.")
+        except Exception as e:
+            print(f"Error parsing DMA buffers: {e}")
+    
+        return 0.0
 
     @staticmethod
     def _get_process_mem_mb():
