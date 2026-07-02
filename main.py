@@ -119,7 +119,7 @@ def main():
 
     if not args.graphics and not args.simulator:
         # Video stream via RTSP
-        from rtsp_stream_server import RTSPStreamServer
+        from src.streaming.rtsp_stream_server import RTSPStreamServer
         rtsp = RTSPStreamServer(
             fps=24,
             width=640,
@@ -134,7 +134,7 @@ def main():
     if args.dashboard:
         dashboard = DashboardServer(port=5000)
         dashboard.start()
-
+    
     drone = DroneControl(port, dashboard=dashboard)
 
     drone_shell = DroneShell(drone, vine_classifier)
