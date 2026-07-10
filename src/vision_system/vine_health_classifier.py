@@ -28,7 +28,7 @@ class VineHealthClassifier:
         self._method = None
         self._timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
-        self.output_dir = pathlib.Path("../runs") / self._timestamp
+        self.output_dir = pathlib.Path.cwd() / "runs" / self._timestamp
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         # Camera settings
