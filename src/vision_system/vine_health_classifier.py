@@ -6,14 +6,21 @@ import numpy as np
 import os
 import csv
 import datetime
-import subprocess
 import psutil
-import re
 from scipy.special import softmax
 
 class VineHealthClassifier:
-    def __init__(self, camera: int, fps: int = 10):
+    def __init__(self, camera: int, fps: int, camera_config: dict,
+                 cnn_model_path: str, yolo_model_path: str,
+                 leaf_detection_conf_threshold: float, leaf_detection_iou_threshold: float,
+                 hybrid_unhealthy_threshold: float):
         self.class_names = ['no saludable', 'saludable']
+        self.cnn_model_path = cnn_model_path
+        self.yolo_model_path = yolo_model_path
+        self.leaf_detection_conf_threshold = leaf_detection_conf_threshold
+        self.leaf_detection_iou_threshold = leaf_detection_iou_threshold
+        self.hybrid_unhealthy_threshold = hybrid_unhealthy_threshold
+
         self._running = False
         self._latest_frame = None
         self._fps = fps
@@ -27,17 +34,20 @@ class VineHealthClassifier:
         # Camera settings
         self.camera = camera
         self.source = cv2.VideoCapture(self.camera)
+        self.frame_width = camera_config.get("width")
+        self.frame_height = camera_config.get("height")
+        self.camera_fps = camera_config.get("fps")
 
         # Cap camera buffer for lighter data transfer
-        self.source.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-        self.source.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-        self.source.set(cv2.CAP_PROP_FPS, 30)
+        self.source.set(cv2.CAP_PROP_FRAME_WIDTH, self.frame_width)
+        self.source.set(cv2.CAP_PROP_FRAME_HEIGHT, self.frame_height)
+        self.source.set(cv2.CAP_PROP_FPS, self.camera_fps)
         self.source.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
         # Define codec and create VideoWriter
         self.fourcc = cv2.VideoWriter_fourcc(*'mp4v')
         filepath = self.output_dir / "recording.mp4"
-        self.out = cv2.VideoWriter(filepath, self.fourcc, fps, (480, 640))
+        self.out = cv2.VideoWriter(filepath, self.fourcc, fps, (self.frame_height, self.frame_width))
 
         if not self.out.isOpened():
             print("VideoWriter failed to open!")
@@ -51,32 +61,24 @@ class VineHealthClassifier:
 
     def _load_models(self):
         # Load classifier models
-        self.device = "Orange Pi 5 / RK3588"
+        self.device = "Orange Pi 5 / RK3588" # used to print the run parameters
         from rknnlite.api import RKNNLite
         ram_before_cnn_weights = self._get_process_mem_mb()
-        npu_before_cnn_weights = self._get_npu_mem_mb()
         self.model = RKNNLite()
-        self.model_path = "model/vine_health_classifier.rknn"
-        self.model.load_rknn(self.model_path)
+        self.model.load_rknn(self.cnn_model_path)
         self.model.init_runtime()
         ram_after_cnn_weights = self._get_process_mem_mb()
-        npu_after_cnn_weights = self._get_npu_mem_mb()
         self.cnn_weight_memory = ram_after_cnn_weights - ram_before_cnn_weights
-        self.npu_weight_memory = npu_after_cnn_weights - npu_before_cnn_weights
         print('RKNN models loaded on NPU')
 
         # Load YOLO object detection models
         ram_before_yolo_weights = self._get_process_mem_mb()
-        npu_before_yolo_weights = self._get_npu_mem_mb()
-        self.yolo_model_path = "utils/coversion/best_rknn_model/best-rk3588.rknn"
         self.detector = RKNNLite()
         self.detector.load_rknn(self.yolo_model_path)
         self.detector.init_runtime()
         self.yolo_classes = None
         ram_after_yolo_weights = self._get_process_mem_mb()
-        npu_after_yolo_weights = self._get_npu_mem_mb()
         self.cnn_weight_memory = ram_after_yolo_weights - ram_before_yolo_weights
-        self.npu_weight_memory = npu_after_yolo_weights - npu_before_yolo_weights
         print('YOLO models loaded on NPU')
 
     def _image_capture(self):
@@ -95,8 +97,6 @@ class VineHealthClassifier:
         Resize and center crop for classification
         Args:
             frame (ndarray): frame to process
-            processing_size (int): size of resized image to process
-            roi (int): Region of interest to crop
         """
         rgb_img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
@@ -113,12 +113,17 @@ class VineHealthClassifier:
         return img
 
     @staticmethod
-    def _preprocess_yolo(frame, processing_size: int):
+    def _preprocess_yolo(frame, processing_size: int) -> tuple[np.ndarray, int, int, int]:
         """
         Letterbox resize and format for YOLO RKNN
         Args:
             frame (ndarray): frame to process
             processing_size (int): size of resized image to process
+        Returns:
+            img (ndarray): resized image
+            scale (int): scale used to resize image
+            pad_top (int): width of gray bar added to top and bottom
+            pad_left (int): width of gray bar added to the left and right
         """
         # Letterbox resize
         h, w = frame.shape[:2]
@@ -138,10 +143,36 @@ class VineHealthClassifier:
 
         return img, scale, pad_top, pad_left
 
-    def _postprocess_yolo(self, output, conf_threshold, iou_threshold, pad_left, pad_top, scale) -> list:
-        """Returns an empty list if no predicted object passes the confidence threshold"""
+    def _postprocess_yolo(self, output: list , conf_threshold: float, iou_threshold: float, pad_left: float, pad_top, scale) -> list:
+        """
+        Decode raw YOLO model output into filtered, image-space bounding boxes.
+
+        Parses the first output tensor as a set of anchor-point predictions
+        (box coordinates + class score), applies confidence thresholding and
+        Non-Maximum Suppression, then rescales the boxes from the padded and
+        resized model input back to the original frame
+
+        Expects a single-class ("leaf") detection head: predictions are assumed
+        to have the layout [cx, cy, w, h, score, ...] per anchor, where only the
+        score at index 4 is used and class_id is therefore always 0.
+
+        Args:
+            output: Raw model output from the RKNN YOLO segmentation model
+            conf_threshold (float): Minimum confidence score for a detection to be kept,
+                                    also passed through as the NMS score threshold.
+            iou_threshold (float): IoU threshold used by NMS to suppress overlapping boxes.
+            scale (float): Scale factor used when the source frame was resized
+            pad_top (int): width of gray bar added to top and bottom.
+            pad_left (int): width of gray bar added to the left and right.
+
+        Returns:
+            List of tuples with detections with the shape [class_id, score, x1, y1, x2, y2], where the last 4 values
+            represent the coordinates of the bounding box.
+
+            Returns an empty list if no predicted object passes the confidence threshold.
+        """
         
-        # 1. Parse index 0 which holds boxes and scores
+        # Parse index 0 which holds boxes and scores
         predictions = output[0]
         if predictions.ndim == 3:
             predictions = predictions[0]  # Shape becomes (37, 8400)
@@ -150,9 +181,7 @@ class VineHealthClassifier:
         if predictions.shape[0] < predictions.shape[1]:
             predictions = predictions.T
 
-        # 2. Extract bounding boxes and class scores
-        # YOLOv8 format: 0,1,2,3 are cx, cy, bw, bh. Index 4 is your "leaf" class score.
-        # Indices 5 to 36 (the remaining 32 channels) are the mask coefficients.
+        # Extract bounding boxes and class scores
         boxes_raw = predictions[:, :4]
         class_scores = predictions[:, 4:5]  # Pulls index 4 as a 2D column matrix
     
@@ -160,17 +189,17 @@ class VineHealthClassifier:
         scores = np.max(class_scores, axis=1)
         class_ids = np.argmax(class_scores, axis=1)
 
-        # 3. Filter out weak detections before processing math
+        # Filter out weak detections
         mask = scores > conf_threshold
         if not np.any(mask):
-            return []  # Return cleanly if nothing is detected in the frame
+            return []
 
         # Apply confidence mask to all vectors
         boxes_raw = boxes_raw[mask]
         scores = scores[mask]
         class_ids = class_ids[mask]
 
-        # 4. Convert bounding boxes from center coordinates to corner coordinates
+        # Convert bounding boxes from center coordinates to corner coordinates
         cx, cy, bw, bh = boxes_raw[:, 0], boxes_raw[:, 1], boxes_raw[:, 2], boxes_raw[:, 3]
         x1 = cx - bw / 2
         y1 = cy - bh / 2
@@ -178,14 +207,14 @@ class VineHealthClassifier:
         y2 = cy + bh / 2
         boxes = np.stack([x1, y1, x2, y2], axis=1)
 
-        # 5. Non-Maximum Suppression (NMS) to clear out overlapping boxes
+        # Non-Maximum Suppression to clear out overlapping boxes
         indices = cv2.dnn.NMSBoxes(
             boxes.tolist(), scores.tolist(), conf_threshold, iou_threshold
         )
         if len(indices) == 0:
             return []
 
-        # 6. Map normalized coordinates back to the original source frame scale
+        # Map normalized coordinates back to the original source frame scale
         if scale <= 0:
             scale = 1.0
 
@@ -198,22 +227,36 @@ class VineHealthClassifier:
             y1_ = int((boxes[i][1] - pad_top) / scale)
             x2_ = int((boxes[i][2] - pad_left) / scale)
             y2_ = int((boxes[i][3] - pad_top) / scale)
-        
-            # Explicit class name setting for 1-class setup
+
             self.yolo_classes = ["leaf"]
         
             results.append((int(class_ids[i]), float(scores[i]), x1_, y1_, x2_, y2_))
 
         return results
 
-    def leaf_detection(self, frame, conf_threshold: float = 0.25, iou_threshold: float = 0.45):
-
+    def leaf_detection(self, frame):
+        """
+        Runs the YOLO model on a frame to detect leaves and returns their bounding boxes, along with timing and memory usage stats.
+        Args:
+            frame (np.array): Raw frame to detect leaves on
+        Returns:
+            results (list[tuple]): List of tuples with detections with the shape [class_id, score, x1, y1, x2, y2], where the last 4 values
+            represent the coordinates of the bounding box.
+            runtime (dict): Dictionary with runtime information, containing {preprocessing_time, inference_time, postprocessing_time, total_time}.
+            memory (dict): Dictionary with runtime memory footprint
+        """
         t0 = time.perf_counter()
         preprocessed_frame, scale, pad_top, pad_left = self._preprocess_yolo(frame, processing_size=640)
         t1 = time.perf_counter()
         output = self.detector.inference(inputs=[preprocessed_frame])
         t2 = time.perf_counter()
-        results = self._postprocess_yolo(output, conf_threshold, iou_threshold, pad_left, pad_top, scale)
+        results = self._postprocess_yolo(
+            output,
+            self.leaf_detection_conf_threshold,
+            self.leaf_detection_iou_threshold,
+            pad_left,
+            pad_top,
+            scale)
         t3 = time.perf_counter()
 
         preprocessing_time = t1 - t0
@@ -230,12 +273,20 @@ class VineHealthClassifier:
 
         memory = {
                 'ram_mb': self._get_process_mem_mb(),
-                'npu_mb': self._get_npu_mem_mb()
         }
         return results, runtime, memory
 
     def leaf_classification(self, frame):
-
+        """
+        Runs the CNN classifier on a leaf frame to predict a health label, along with timing and memory usage stats.
+        Args:
+            frame (np.array): Raw frame to detect leaves on
+        Returns:
+            results (list[tuple]): List of tuples with detections with the shape [class_id, score, x1, y1, x2, y2], where the last 4 values
+            represent the coordinates of the bounding box.
+            runtime (dict): Dictionary with runtime information, containing {preprocessing_time, inference_time, postprocessing_time, total_time}.
+            memory (dict): Dictionary with runtime memory footprint
+        """
         t0 = time.perf_counter()
         input_data = self._preprocess_rknn(frame)
         t1 = time.perf_counter()
@@ -260,13 +311,19 @@ class VineHealthClassifier:
 
         memory = {
             'ram_mb': self._get_process_mem_mb(),
-            'npu_mb': self._get_npu_mem_mb()
         }
 
         return label, confidence, runtime, memory
 
     def _annotate_detected_objects(self, frame, predictions):
-
+        """
+        Draws bounding boxes and confidence labels on the frame for each detected leaf.
+        Args:
+            frame (np.array): frame to annotate.
+            predictions: Iterable of detections, each as (cls_id, score, x1, y1, x2, y2).
+        Returns:
+            The frame with bounding boxes and labels drawn on it.
+        """
         COLORS = [(0, 255, 0), (255, 0, 0), (0, 0, 255)]
 
         for (cls_id, score, x1, y1, x2, y2) in predictions:
@@ -281,12 +338,14 @@ class VineHealthClassifier:
 
         return frame
 
-    def run_leaf_detection(self, conf_threshold: float = 0.25, iou_threshold: float = 0.45):
+    def run_leaf_detection(self):
+        """
+        Continuously captures frames and runs leaf detection, while logging runtime and memory performance per frame.
+        """
         self._running = True
         self._method = "YOLO - Object detection"
 
         baseline_ram = self._get_process_mem_mb()
-        baseline_npu = self._get_npu_mem_mb()
 
         performance = {
             'runtime': {},
@@ -298,11 +357,7 @@ class VineHealthClassifier:
             t_frame_start = time.perf_counter()
             frame = self._image_capture()
 
-            results, runtime, memory= self.leaf_detection(
-                frame=frame,
-                conf_threshold=conf_threshold,
-                iou_threshold=iou_threshold,
-                )
+            results, runtime, memory= self.leaf_detection(frame)
 
             annotated_frame = self._annotate_detected_objects(frame, results)
             self.out.write(annotated_frame)
@@ -314,7 +369,7 @@ class VineHealthClassifier:
             # Save performance stats
             performance['runtime'][str(i)] = runtime
             performance['memory'][str(i)] = {
-                k: v - baseline_ram if 'ram' in k else v - baseline_npu
+                k: v - baseline_ram
                 for k, v in memory.items()
             }
 
@@ -330,11 +385,13 @@ class VineHealthClassifier:
         print("Leaf detection stopped")
 
     def run_leaf_classification(self):
+        """
+        Continuously captures frames and runs leaf classification alone, while logging runtime and memory performance per frame.
+        """
         self._running = True
         self._method = "CNN - Classification"
 
         baseline_ram = self._get_process_mem_mb()
-        baseline_npu = self._get_npu_mem_mb()
 
         performance = {
             'runtime': {},
@@ -357,7 +414,7 @@ class VineHealthClassifier:
             # Save performance stats
             performance['runtime'][str(i)] = runtime
             performance['memory'][str(i)] = {
-                k: v - baseline_ram if 'ram' in k else v - baseline_npu
+                k: v - baseline_ram
                 for k, v in memory.items()
             }
 
@@ -372,16 +429,19 @@ class VineHealthClassifier:
         self._save_performance(performance)
         print("Plant analysis stopped")
 
-    def hybrid_analysis(self, conf_threshold: float = 0.25, iou_threshold: float = 0.45, unhealthy_threshold: float = 0.4,):
+    def hybrid_analysis(self):
         """
         Uses a YOLO models to identify leaves and draw bounding boxes. The image is cropped into multiple images
         of the bounding boxes and runs a CNN on each of them to classify them.
+
+        The final label is decided with a two-stage rule: if the unhealthy-to-total leaf ratio exceeds
+        'hybrid_unhealthy_threshold', the frame is classified as unhealthy; otherwise it falls back to
+        whichever class has the higher weighted-confidence sum.
         """
         self._running = True
         self._method = "Hybrid"
 
         baseline_ram = self._get_process_mem_mb()
-        baseline_npu = self._get_npu_mem_mb()
 
         performance = {
             'runtime': {},
@@ -394,11 +454,7 @@ class VineHealthClassifier:
             frame = self._image_capture()
 
             # Run leaf detection
-            detection_results, detection_runtime, detection_memory = self.leaf_detection(
-                            frame=frame,
-                            conf_threshold=conf_threshold,
-                            iou_threshold=iou_threshold,
-                            )
+            detection_results, detection_runtime, detection_memory = self.leaf_detection(frame)
 
             confidence_healthy = []
             confidence_not_healthy = []
@@ -407,20 +463,17 @@ class VineHealthClassifier:
 
             # Iterate over detections
             for (cls_id, score, x1, y1, x2, y2) in detection_results:
-                # Skip all detected objects that are not leaves
-                # if "Lea" not in self.yolo_classes[cls_id]:
-                #    continue
 
-                # 1. Get current image boundaries safely
+                # Get current image boundaries
                 img_h, img_w = frame.shape[:2]
             
-                # 2. Guard rail: Clamp coordinates so they NEVER exceed the frame boundaries [0, max_dim - 1]
+                # Clamp coordinates so they don't exceed the frame boundaries [0, max_dim - 1]
                 x1 = max(0, min(x1, img_w - 1))
                 y1 = max(0, min(y1, img_h - 1))
                 x2 = max(0, min(x2, img_w - 1))
                 y2 = max(0, min(y2, img_h - 1))
             
-                # 3. Defensive Gate: If the box is empty or inverted, skip it entirely
+                # If the box is empty or inverted, skip it
                 if (x2 - x1) <= 0 or (y2 - y1) <= 0:
                     continue
                 # Crop the Region of Interest
@@ -449,7 +502,7 @@ class VineHealthClassifier:
                 n_total = len(confidence_healthy) + len(confidence_not_healthy)
                 ratio = len(confidence_not_healthy) / n_total
 
-                if ratio > unhealthy_threshold:
+                if ratio > self.hybrid_unhealthy_threshold:
                     final_confidence = w_not_healthy / len(confidence_not_healthy)
                     final_label = "no saludable"
                 elif w_healthy > w_not_healthy:
@@ -460,7 +513,6 @@ class VineHealthClassifier:
                     final_label = "no saludable"
 
             ram_sample = self._get_process_mem_mb()
-            npu_sample = self._get_npu_mem_mb()
 
             annotated_frame = self._annotate_detected_objects(frame, detection_results)
             annotated_frame = self._draw_prediction(annotated_frame, final_label, final_confidence)
@@ -478,7 +530,6 @@ class VineHealthClassifier:
             }
             performance['memory'][str(i)] = {
                 'ram_mb': ram_sample - baseline_ram,
-                'npu_mb': npu_sample - baseline_npu,
                 'num_detected_leaves': len(detection_results)
             }
 
@@ -510,7 +561,7 @@ class VineHealthClassifier:
 
         config = {
             "device": self.device,
-            "classification models": pathlib.Path(self.model_path).name,
+            "classification models": pathlib.Path(self.cnn_model_path).name,
             "detection models": pathlib.Path(self.yolo_model_path).name,
             "method": self._method
         }
@@ -566,41 +617,6 @@ class VineHealthClassifier:
         if not available:
             return "No available cameras"
         return available
-
-    @staticmethod
-    def _get_npu_mem_mb():
-        """Read shared DMA-BUF memory allocated by the rknpu driver on Kernel 6.1."""
-        path = '/sys/kernel/debug/dma_buf/bufinfo'
-        if not os.path.exists(path):
-            return 0.0
-    
-        try:
-            # Read the buffer info file (requires sudo)
-            result = subprocess.run(
-                ['sudo', 'cat', path],
-                capture_output=True, text=True, check=True
-            )
-    
-            total_npu_bytes = 0
-            # Look for buffers explicitly allocated or attached to the rknpu driver
-            for line in result.stdout.splitlines():
-                if 'rknpu' in line or 'rk-npu' in line:
-                    # DMA-BUF lines usually contain the size of the buffer in bytes
-                    # Example: size: 16777216 or similar integer listings
-                    matches = re.findall(r'\bsize:\s*(\d+)\b|\b(\d+)\s+bytes\b', line, re.IGNORECASE)
-                    for match in matches:
-                        # Snag whichever regex group matched the number
-                        num = match[0] if match[0] else match[1]
-                        total_npu_bytes += int(num)
-    
-            return total_npu_bytes / 1024 / 1024  # Convert to MB
-    
-        except subprocess.CalledProcessError:
-            print("Permission Denied: Run your script with 'sudo' to inspect DMA-BUFs.")
-        except Exception as e:
-            print(f"Error parsing DMA buffers: {e}")
-    
-        return 0.0
 
     @staticmethod
     def _get_process_mem_mb():

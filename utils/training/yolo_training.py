@@ -4,15 +4,16 @@ import argparse
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('-p', '--path', type=str)
+    parser.add_argument('-p', '--model_path', type=str)
+    parser.add_argument('-d', '--training_data', type=str)
+    parser.add_argument('-e', '--epochs', type=str)
     args = parser.parse_args()
 
-    # Load pretrained models
-    model = YOLO("/runs/detect/train-9/weights/yolo_grapevine_canopy_leaves.pt")
+    # Load pretrained model
+    model = YOLO(args.model_path)
 
     # Train models | If available, GPU is used by default
-    #data_dir = args.path
-    #models.train(data=data_dir, epochs=50, device=0, save=True, imgsz=640)
+    model.train(data=args.training_data, epochs=args.epochs, device=0, save=True, imgsz=640)
 
     # Test object detection with fine-tuned models
     results = model("D:\\aloza\\Documents\\Escuela\\Feb-Jun26\\yolo_test_leaves_2.jpeg")
@@ -21,4 +22,4 @@ if __name__ == "__main__":
         result.show()
 
     # Export the models to RKNN format
-    # models.export(format="onnx")
+    model.export(format="onnx")

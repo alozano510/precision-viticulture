@@ -1,4 +1,5 @@
 import os
+import argparse
 import time
 import torch
 import torch.nn as nn
@@ -156,14 +157,36 @@ def visualize_model(model, num_images=6):
         model.train(mode=was_training)
 
 if __name__=='__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('dataset_path', type=str)
+    parser.add_argument('epochs', type=int)
+    parser.add_argument('-l','--learning_rate', type=float, default=1e-4)
+    parser.add_argument('-d','--weight_decay', type=float, default=1e-4)
+    parser.add_argument('-s','--decay_step_size', type=int, default=7)
+    parser.add_argument('-g','--decay_factor_gamma', type=float, default=0.1)
+    args = parser.parse_args()
+
+    dataset_path = args.dataset_path
+    epochs = args.epochs
+    learning_rate = args.learning_rate
+    weight_decay = args.weight_decay
+    decay_step_size = args.decay_step_size
+    gamma = args.decay_factor_gamma
+
+    while not dataset_path:
+        print(f"Specify the training dataset path")
+        model = input()
+    while not epochs:
+        print(f"Specify the training epochs")
+        epochs = input()
+
     # Set GPU for processing
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
     # Load data
-    data_dir = "/data"
     image_datasets = {x: datasets.ImageFolder(
-            root=os.path.join(data_dir, x),
+            root=dataset_path,
             transform=data_transforms[x],
             target_transform=remap_label)
         for x in ['train', 'val']}
@@ -202,14 +225,14 @@ if __name__=='__main__':
     # Optimization algorithm
     optimizer = torch.optim.AdamW(
         filter(lambda p: p.requires_grad, model.parameters()),
-        lr=1e-4,
-        weight_decay=1e-4
+        lr=learning_rate,
+        weight_decay=weight_decay
     )
 
     # Decay Learning Rate by a factor of 0.1 every 7 epochs
-    exp_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size=7, gamma=0.1)
+    exp_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size=decay_step_size, gamma=gamma)
 
-    tuned_model = train_model(model, criterion, optimizer, exp_lr_scheduler, device, dataloaders, dataset_sizes, num_epochs=10)
+    tuned_model = train_model(model, criterion, optimizer, exp_lr_scheduler, device, dataloaders, dataset_sizes, num_epochs=epochs)
 
     visualize_model(tuned_model)
 

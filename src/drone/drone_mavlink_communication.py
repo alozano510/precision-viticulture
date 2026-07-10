@@ -8,16 +8,21 @@ from dronekit import connect, VehicleMode, LocationGlobalRelative
 from src.web_dashboard.dashboard_server import DashboardServer
 
 """
-Notas para bitácora:
 La librería de Dronekit permite el cambio de parámetros en el dron, pero no asegura que estos se hagan.
 No hay soporte para saber si el intercambio de datos fue exitoso o no.
 Actualmente la liberería ya no recibe soporte, por lo que estos features nunca serán arreglados.
 """
 
+TAKEOFF_ALTITUDE = 1
+TAKEOFF_ALT_THRESHOLD = 0.2
+LANDING_THRESHOLD = 0.15
+LOG_SAMPLE_PERIOD = 0.2
+
 class DroneControl:
     def __init__(self, port: str = '/dev/ttyS0',
-                 dashboard: DashboardServer = None,):
-        self.drone = connect(port, baud=57600, wait_ready=True)
+                 dashboard: DashboardServer = None,
+                 baudrate: int = 57600,):
+        self.drone = connect(port, baud=baudrate, wait_ready=True)
         if self.drone is not None:
             print("Successfully connected to drone")
 
@@ -28,8 +33,14 @@ class DroneControl:
         self._log_thread = None
         self._dashboard = dashboard
 
-    def take_off(self):
-        """Arms drone and prepares it to take off"""
+    def take_off(self,takeoff_alt_threshold : float = 0.2, takeoff_altitude: float = 1):
+        """
+        Arms drone and prepares it to take off
+        Args:
+            takeoff_alt_threshold (float): measured altitude that the drone has to surpass to be confidently considered
+                                           airborne due to the altitude measurement accuracy and noise.
+            takeoff_altitude (float): Altitude to reach on take off
+        """
         #Asegurar que el dron tiene una buena localizacion tomada con el GPS
         while not self.drone.home_location:
             cmds = self.drone.commands
@@ -49,9 +60,9 @@ class DroneControl:
         print("Motors armed")
         # Give some time to the autopilot to stabilize
         time.sleep(2)
-        if self.drone.location.global_relative_frame.alt < 0.2: # given the drone has an altitude accuracy of 0.5, adjust if necessary
+        if self.drone.location.global_relative_frame.alt < takeoff_alt_threshold: # given the drone has an altitude accuracy of 0.5, adjust if necessary
             print("Taking off...")
-            self.drone.simple_takeoff(alt=1) # 1 meter
+            self.drone.simple_takeoff(alt=takeoff_altitude) # 1 meter
             # Give some time to the drone to gain elevation
             time.sleep(3)
 
@@ -59,21 +70,26 @@ class DroneControl:
         self.drone.close()
 
     def altitude_control(self, ref: float):
-
+        """
+        It initializes flight and keeps the drone hovering at a given <ref> altitude in meters.
+        Latitude and longitude are controlled to stay as the starting ones.
+        Args:
+            ref: goal altitude in meters.
+        """
         self.drone.mode = VehicleMode('GUIDED')
         while not self.drone.mode.name == 'GUIDED':
             print("Changing drone mode to GUIDED...")
             time.sleep(1)
         print("Drone mode GUIDED")
 
-        self.take_off()
+        self.take_off(takeoff_alt_threshold=TAKEOFF_ALT_THRESHOLD, takeoff_altitude=TAKEOFF_ALTITUDE)
 
         self._running = True
         self._ref = ref
         # Flag for reaching the reference altitude
         reached = False
 
-        self.start_logging()
+        self.start_logging(LOG_SAMPLE_PERIOD)
 
         # Set the target altitude
         try:
@@ -96,11 +112,12 @@ class DroneControl:
             self._running = False
 
         finally:
-            self.land()
+            self.land(LANDING_THRESHOLD)
             csv_path = self.stop_logging()
             print("Altitude control stopped.")
 
     def analysis_route(self):
+        """Starts the mission loaded in the drone."""
         # Download the vehicle waypoints (commands). Wait until download is complete.
         cmds = self.drone.commands
         cmds.download()
@@ -113,20 +130,19 @@ class DroneControl:
         print(self.drone.mode.name)
         print("Changed drone mode to AUTO")
 
-    def land(self):
-        self.drone.parameters['LAND_SPEED'] = 30 # cm/s
-        self.drone.parameters['LAND_SPEED_HIGH'] = 60 # cm/s
-
-        # Give some time for the parameters to change
-        time.sleep(1)
-
+    def land(self, landing_threshold: float = 0.15):
+        """
+        Args:
+            landing_threshold (float): Threshold to surpass to consider that the drone has landed considering the
+                                        altitude measurement accuracy and noise.
+        """
         print("Landing...")
         self.drone.mode = VehicleMode('LAND')
         while not self.drone.mode.name == 'LAND':
             print("Switching to LAND mode...")
             time.sleep(1)
 
-        while self.drone.location.global_relative_frame.alt > 0.15:
+        while self.drone.location.global_relative_frame.alt > landing_threshold:
             print(f"Altitude: {self.drone.location.global_relative_frame.alt:.2f}m")
             time.sleep(1)
 
@@ -163,7 +179,7 @@ class DroneControl:
                 alt = self.drone.location.global_relative_frame.alt
                 error = self._ref - alt
                 error_per = (error / self._ref) * 100
-                current = self.drone.battery.current or 0.0  # Amps; -1 if unsupported
+                current = self.drone.battery.current or 0.0
                 entry = {
                     'time_s': round(t, 3),
                     'altitude_m': round(alt, 3),
@@ -209,7 +225,3 @@ class DroneControl:
 
         print(f"Log saved to: {filepath}")
         return filepath
-
-    def _plot_control_state(self):
-        # TODO: implement function to show control plots. This has to somehow always work. Maybe implement it as part of the altitude control function. Check section on 'Observing attribute changes' in dronekit documentation.
-        raise NotImplementedError

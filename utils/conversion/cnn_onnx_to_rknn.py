@@ -13,8 +13,8 @@ args = parser.parse_args()
 model = args.model_path
 
 while not model:
-    print(f"Specify the models path for the ONNX to convert")
-    model = input("Enter models path: ").strip()
+    print(f"Specify the model path for the ONNX to convert")
+    model = input("Enter model path: ").strip()
 
 # Convert ONNX to RKNN
 rknn = RKNN()

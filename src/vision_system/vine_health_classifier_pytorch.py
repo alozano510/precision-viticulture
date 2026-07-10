@@ -1,5 +1,4 @@
 import cv2
-import os
 from PIL import Image
 import time
 import torch
@@ -21,14 +20,12 @@ class VineHealthClassifierTorch(VineHealthClassifier):
         self.model = models.resnet50(weights=None)
         in_features = self.model.fc.in_features
         self.model.fc = nn.Linear(in_features, 2)
-        self.model_path = "D:\PycharmProjects\precision-viticulture\models\cnn_binary_classifier_v1.pt"
-        self.model.load_state_dict(torch.load(self.model_path, map_location=self.device))
+        self.model.load_state_dict(torch.load(self.cnn_model_path, map_location=self.device))
         self.model.to(self.device)
         self.model.eval()
         print("PyTorch classifier loaded")
 
         # Load Ultralytics YOLO detector
-        self.yolo_model_path = "D:\\PycharmProjects\\precision-viticulture\\runs\\segment\\train-5\\weights\\best.pt"
         self.detector = YOLO(self.yolo_model_path)
         self.yolo_classes = self.detector.names
         print("Ultralytics YOLO loaded")
@@ -89,7 +86,12 @@ class VineHealthClassifierTorch(VineHealthClassifier):
     def leaf_detection(self, frame, conf_threshold: float = 0.25, iou_threshold: float = 0.45):
         """Override: run Ultralytics YOLO inference instead of RKNN."""
         t0 = time.perf_counter()
-        output = self.detector(frame, verbose=False, conf=conf_threshold, iou=iou_threshold)
+        output = self.detector(
+            frame,
+            verbose=False,
+            conf=self.leaf_detection_conf_threshold,
+            iou=self.leaf_detection_iou_threshold
+        )
         t1 = time.perf_counter()
 
         results = []

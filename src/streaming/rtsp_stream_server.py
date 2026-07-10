@@ -33,7 +33,7 @@ class _VideoFactory(GstRtspServer.RTSPMediaFactory):
 
     def do_create_element(self, url):
         encoder = (
-            "mpph264enc bps=2000000"                                              # Rockchip NPU
+            "mpph264enc bps=2000000" # Rockchip NPU
             if self._use_hw_encoder else
             "x264enc tune=zerolatency bitrate=2000 speed-preset=ultrafast"  # software
         )

@@ -1,0 +1,32 @@
+{
+  "drone": false,
+  "simulator": true,
+  "orangepi": false,
+  "sitl_simulation_port": "tcp:127.0.0.1:5763",
+  "graphics": true,
+  "dashboard": false,
+  "drone_config":
+  {
+    "port": "/dev/ttyS4",
+    "communication_baudrate": 57600
+  },
+  "camera":
+  {
+    "fps": 24,
+    "width": 640,
+    "height": 480
+  },
+  "vine_health_classifier":
+  {
+    "fps": 10
+  },
+  "rtsp_streamer":
+  {
+    "host": "0.0.0.0",
+    "port": 8554,
+    "path": "/stream",
+    "fps": 20,
+    "width": 640,
+    "height": 480
+  }
+}
