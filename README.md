@@ -46,7 +46,7 @@ sudo apt install -y \
 
 ## System Communication Diagram
 
-![system communication diagram]https://github.com/alozano510/precision-viticulture/comm_diagram.png
+![system communication diagram](https://github.com/alozano510/precision-viticulture/comm_diagram.png)
 
 ## Program Parameters
 
