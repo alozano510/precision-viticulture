@@ -236,5 +236,5 @@ if __name__=='__main__':
 
     visualize_model(tuned_model)
 
-    torch.save(tuned_model.state_dict(), "/models/cnn_binary_classifier_v1.pt")
-    print("Model saved!")
+    torch.save(tuned_model.state_dict(), "/models/cnn_binary_classifier.pt")
+    print("Model saved to /models/cnn_binary_classifier.pt")
