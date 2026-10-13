@@ -16,7 +16,7 @@ if __name__ == "__main__":
     model.train(data=args.training_data, epochs=args.epochs, device=0, save=True, imgsz=640)
 
     # Test object detection with fine-tuned models
-    results = model("D:\\aloza\\Documents\\Escuela\\Feb-Jun26\\yolo_test_leaves_2.jpeg")
+    results = model("yolo_test_leaves_2.jpeg")
 
     for result in results:
         result.show()
