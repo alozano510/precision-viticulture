@@ -8,11 +8,6 @@ from src.vision_system.vine_health_classifier import VineHealthClassifier
 from src.drone.drone_mavlink_communication import DroneControl
 from src.web_dashboard.dashboard_server import DashboardServer
 
-'''
- Get program settings for command line.
---camera: all the camera devices connected to the computer as integers starting from 0. If not configured, the first camera is selected (0).
-'''
-
 # Values for RTSP stream server
 FPS = 24
 WIDTH = 640
@@ -57,10 +52,13 @@ class DroneShell(Cmd):
     def do_altitude_control(self, ref):
         """Controls the altitude of the drone at a given reference in meters. Type 'altitude_control <reference>'"""
         self._stop_active()
-        ref = float(ref)
+
         if not self.drone:
             print("There is no drone or drone simulator connected. Connect to drone or simulator and restart the program to use this command.")
         else:
+            while not ref:
+                ref = input("Please specify a goal altitude in meters: ")
+            ref = float(ref)
             self._active_thread = threading.Thread(target=self.drone.altitude_control, args=(ref,), daemon=True)
             self._active_thread.start()
             print(f"Starting altitude control at {ref} meters...")
@@ -107,7 +105,7 @@ class DroneShell(Cmd):
         while model not in valid_models:
             if model is not None:
                 print(f"Invalid model '{model}'. Valid options: {', '.join(valid_models)}")
-            model = input("Enter model (classification/detection): ").strip().lower()
+            model = input("Enter model (classification/detection/hybrid): ").strip().lower()
 
         if model == "classification":
             self._active_thread = threading.Thread(target=self.vine_classifier.run_leaf_classification, daemon=True)
@@ -163,7 +161,7 @@ def main():
         else:
             drone = None
 
-    if not config.get('graphics') and not config.get('simulator'):
+    if not config.get('graphics') and config.get('orangepi'):
         # Video stream via RTSP
         from src.streaming.rtsp_stream_server import RTSPStreamServer
         rtsp_config = config.get('rtsp_streamer')

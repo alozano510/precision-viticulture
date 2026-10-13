@@ -1,6 +1,6 @@
 {
   "drone": false,
-  "simulator": true,
+  "simulator": false,
   "orangepi": false,
   "sitl_simulation_port": "tcp:127.0.0.1:5763",
   "graphics": true,
