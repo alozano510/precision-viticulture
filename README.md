@@ -211,11 +211,12 @@ The scripts live in `utils/training/` and `utils/conversion/`.
    `utils/training/cnn_training.py` train the detector and classifier
    independently.
 3. **Convert to ONNX** — `utils/conversion/cnn_torch_to_onnx.py` exports the
-   PyTorch classifier to ONNX (YOLO exports to ONNX automatically as the last
-   step of `yolo_training.py`).
+   PyTorch classifier to ONNX (This step is not needed for the YOLO model).
 4. **Convert to RKNN** — `utils/conversion/cnn_onnx_to_rknn.py` and
-   `utils/conversion/yolo_onnx_to_rknn.py` convert each ONNX model into the
+   `utils/conversion/yolo_pt_to_rknn.py` convert each ONNX model into the
    `.rknn` format the Orange Pi 5 / RK3588 NPU runs at inference time.
+   These scripts must be run on the Orange Pi. For the CNN Classifier,
+   use the ONNX file as input. For the YOLO model, use the `.pt` file.
 
 You must complete all four steps before `VineHealthClassifier` in `main.py`
 
